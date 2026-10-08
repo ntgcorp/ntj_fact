@@ -441,9 +441,10 @@ class acJobsApp:
             dictTemp = self.dictJobs[sKey]
             for k, v in dictTemp.items():
                 if k.startswith("FILE.") and not k.startswith("FILE.OUT."):
-                    sFile = os.path.basename(str(v).strip())
+                    sVal = str(v).strip()
+                    sFile = os.path.basename(sVal)
                     if not os.path.isfile(sFile):
-                        sResult += f"File richiesto non presente {sFile}\n"
+                        sResult += f"File richiesto non presente {sVal}\n"
         if sResult:
             print("Eseguita ntjobsapp." + sProc + ": " + sResult)
             return sResult

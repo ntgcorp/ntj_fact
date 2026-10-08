@@ -2,8 +2,12 @@
 ntj_fact.py - ntJobsApp per la manipolazione di file di dati conosciuti.
 
 Prima versione: solo XLS/XLSX (comando XLS.TAB.MERGE).
-Specifica di funzionamento: Prompt_ntj_fact.md.
+Specifiche: Prompt_ntj_fact.md (file) e prompt_ntj_fact_db.md (database).
 Contesto ntJobsApp e convenzioni: Prompt_ntjobsapp_light.md.
+
+Comandi file: XLS.TAB.MERGE, XLS.SHEET.APPEND.
+Comandi database (se ntj_fact_db.py importato): DB.OPEN, DB.CREATE, DB.CLOSE,
+SQL.EXEC, TAB.ZAP, TAB.CREATE.JSON, IMPORT. Vedi prompt_ntj_fact_db.md.
 
 Uso:
     python ntj_fact.py <file_job.ini>
@@ -25,6 +29,14 @@ from acJobsApp import acJobsApp, ErrorProc, Timestamp, NormalizePath
 NTJ_FACT_VER = "20260919"
 
 jData = acJobsApp()
+
+# Flag modulo DB: True se ntj_fact_db.py e' stato importato con successo
+_db_module_available = False
+try:
+    import ntj_fact_db
+    _db_module_available = True
+except ImportError:
+    pass
 
 
 class xls_merge:
@@ -360,7 +372,8 @@ class xls_append:
     - in_xls_name: file xls/xlsx base (deve esistere, copiato in output)
     - in_sheet_file: diverso file xls/xlsx da cui si legge SHEET.IN
     - out_xls_name: file xls/xlsx destinazione (copia della base + sheet)
-    - in_sheet_name: nome dello sheet sorgente e destinazione
+    - in_sheet_name: nome dello sheet sorgente (in FILE.IN.SHEET)
+    - out_sheet_name: nome del foglio destinazione (default in_sheet_name)
     - num_righe_copiate: righe non vuote copiate
     - wb_out/ws_out: workbook/sheet di output (solo flusso xlsx)
     """
@@ -373,6 +386,7 @@ class xls_append:
         self.in_sheet_file = ""
         self.out_xls_name = ""
         self.in_sheet_name = ""
+        self.out_sheet_name = ""
         self.num_righe_copiate = 0
         self.wb_out: Any = None
         self.ws_out: Any = None
@@ -390,22 +404,24 @@ class xls_append:
         sLow = sFile.lower()
         return sLow.endswith(".xls") and not sLow.endswith(".xlsx")
 
-    def sheet_title_verify(self) -> str:
+    def sheet_title_verify(self, sName: str = "") -> str:
         """
-        Verifica che in_sheet_name sia un nome foglio Excel valido.
+        Verifica che sName sia un nome foglio Excel valido.
 
-        Max 31 caratteri, senza []:*?/\\.
+        Senza sName verifica in_sheet_name. Max 31 caratteri, senza []:*?/\\.
         """
         sProc = "sheet_title_verify"
         print("Sto eseguendo " + sProc)
         sResult = ""
         try:
-            if len(self.in_sheet_name) > 31:
+            if not sName:
+                sName = self.in_sheet_name
+            if len(sName) > 31:
                 sResult = ("Nome sheet troppo lungo (max 31 caratteri): "
-                           + self.in_sheet_name)
-            elif any(c in self.in_sheet_name for c in "[]:*?/\\"):
+                           + sName)
+            elif any(c in sName for c in "[]:*?/\\"):
                 sResult = ("Nome sheet con caratteri non validi ([]:*?/\\): "
-                           + self.in_sheet_name)
+                           + sName)
         except Exception as e:
             sResult = str(e)
         return ErrorProc(sResult, sProc)
@@ -415,7 +431,8 @@ class xls_append:
         Legge e verifica i parametri del job.
 
         Si aspetta FILE.IN.XLS (base esistente), FILE.IN.SHEET (esistente),
-        SHEET.IN, FILE.OUT.XLS (estensione .xls/.xlsx, qualsiasi case).
+        SHEET.IN, SHEET.OUT (opzionale, default SHEET.IN),
+        FILE.OUT.XLS (estensione .xls/.xlsx, qualsiasi case).
         Verifica anche le librerie richieste dalle estensioni in gioco.
         """
         sProc = "xls_append_args"
@@ -425,6 +442,7 @@ class xls_append:
             self.in_xls_name = str(dictJob.get("FILE.IN.XLS", "")).strip()
             self.in_sheet_file = str(dictJob.get("FILE.IN.SHEET", "")).strip()
             self.in_sheet_name = str(dictJob.get("SHEET.IN", "")).strip()
+            self.out_sheet_name = str(dictJob.get("SHEET.OUT", "")).strip()
             self.out_xls_name = str(dictJob.get("FILE.OUT.XLS", "")).strip()
             if not self.in_xls_name:
                 sResult = "Parametro FILE.IN.XLS non precisato"
@@ -443,7 +461,11 @@ class xls_append:
                 sResult = ("Il file di output '" + self.out_xls_name
                            + "' deve avere estensione .xls o .xlsx.")
             if not sResult:
+                if not self.out_sheet_name:
+                    self.out_sheet_name = self.in_sheet_name
                 sResult = self.sheet_title_verify()
+            if not sResult:
+                sResult = self.sheet_title_verify(self.out_sheet_name)
             if not sResult:
                 sResult = self.append_engines_verify()
         except Exception as e:
@@ -527,13 +549,45 @@ class xls_append:
         sProc = "sheet_resolve_out"
         print("Sto eseguendo " + sProc)
         try:
-            sWant = str(self.in_sheet_name).lower()
+            sWant = str(self.out_sheet_name).lower()
             for sName in self.wb_out.sheetnames:
                 if str(sName).lower() == sWant:
                     return str(sName)
             return ""
         except Exception:
             return ""
+
+    def tables_normalize(self) -> str:
+        """
+        Declassa le tabelle query in tabelle standard.
+
+        openpyxl non salva queryTables/connections: una tabella
+        tableType=queryTable senza le sue parti scatena in Excel
+        il ripristino "contenuto illeggibile". L'output e' uno
+        snapshot statico, il legame query e' perso comunque.
+        """
+        sProc = "tables_normalize"
+        print("Sto eseguendo " + sProc)
+        sResult = ""
+        try:
+            nNorm = 0
+            for ws in self.wb_out.worksheets:
+                oTables = getattr(ws, "_tables", [])
+                if isinstance(oTables, dict):
+                    oTables = list(oTables.values())
+                for oTab in list(oTables):
+                    sType = str(getattr(oTab, "tableType", "") or "")
+                    if sType != "queryTable":
+                        continue
+                    oTab.tableType = "worksheet"
+                    for oCol in list(getattr(oTab, "tableColumns", []) or []):
+                        if hasattr(oCol, "queryTableFieldId"):
+                            oCol.queryTableFieldId = None
+                    nNorm += 1
+            print("Tabelle query normalizzate: " + str(nNorm))
+        except Exception as e:
+            sResult = str(e)
+        return ErrorProc(sResult, sProc)
 
     def sheet_is_pristine(self, ws: Any) -> bool:
         """True se il foglio e' vuoto (una cella vuota, nessun merge)."""
@@ -566,7 +620,7 @@ class xls_append:
 
     def xls_sheet_create(self) -> str:
         """
-        Predispone lo sheet destinazione in_sheet_name nell'output.
+        Predispone lo sheet destinazione out_sheet_name nell'output.
 
         Apre FILE.OUT.XLS (copia della base): se lo sheet esiste viene
         svuotato, se manca viene creato. Gli altri sheet restano invariati.
@@ -581,6 +635,9 @@ class xls_append:
                 return ErrorProc(sResult, sProc)
             from openpyxl import load_workbook
             self.wb_out = load_workbook(NormalizePath(self.out_xls_name))
+            sResult = self.tables_normalize()
+            if sResult:
+                return ErrorProc(sResult, sProc)
             sFound = self.sheet_resolve_out()
             if sFound:
                 self.ws_out = self.wb_out[sFound]
@@ -589,8 +646,8 @@ class xls_append:
                     return ErrorProc(sResult, sProc)
                 print("Sheet '" + sFound + "' svuotato.")
                 return ErrorProc(sResult, sProc)
-            self.ws_out = self.wb_out.create_sheet(self.in_sheet_name)
-            print("Sheet '" + self.in_sheet_name + "' creato.")
+            self.ws_out = self.wb_out.create_sheet(self.out_sheet_name)
+            print("Sheet '" + self.out_sheet_name + "' creato.")
         except Exception as e:
             sResult = str(e)
         return ErrorProc(sResult, sProc)
@@ -628,11 +685,13 @@ class xls_append:
         except Exception:
             return (ws.max_row or 0, ws.max_column or 0)
 
-    def copy_openpyxl(self, ws_in: Any, ws_out: Any) -> int:
+    def copy_openpyxl(self, ws_in: Any, ws_out: Any) -> tuple:
         """
-        Copia valori, formule, merge e dimensioni da ws_in a ws_out.
+        Copia solo valori (mai formule: incolla-valori), merge e dimensioni.
 
-        Restituisce il numero di righe con almeno un valore.
+        Il foglio sorgente va letto data_only=True dal chiamante.
+        Restituisce (righe_copiate, errore): l'errore non e' mai
+        silenziato, va a video e nel log via sequenza chiamante.
         """
         sProc = "copy_openpyxl"
         print("Sto eseguendo " + sProc)
@@ -657,9 +716,9 @@ class xls_append:
             for nIdx, dim in ws_in.row_dimensions.items():
                 if dim.height is not None:
                     ws_out.row_dimensions[nIdx].height = dim.height
-            return nRows
-        except Exception:
-            return 0
+            return (nRows, "")
+        except Exception as e:
+            return (0, ErrorProc(str(e), sProc))
 
     def copy_xlrd_to_openpyxl(self, sFile: str, sSheet: str, ws_out: Any) -> tuple:
         """
@@ -735,7 +794,8 @@ class xls_append:
         Scrive uno o piu' sheet in formato .xls tramite xlwt.
 
         booksheets: lista di (titolo, rows, merges, col_widths, row_heights).
-        Le stringhe che iniziano con "=" sono scritte come formule.
+        Solo valori, mai formule (incolla-valori): le stringhe sono
+        scritte come testo anche se iniziano con "=".
         """
         sProc = "write_xlwt"
         print("Sto eseguendo " + sProc)
@@ -779,10 +839,7 @@ class xls_append:
                             continue
                         if isinstance(v, float) and v.is_integer():
                             v = int(v)
-                        if isinstance(v, str) and v.startswith("=") and len(v) > 1:
-                            ws.write(i, j, xlwt.Formula(v[1:]))
-                        else:
-                            ws.write(i, j, v)
+                        ws.write(i, j, v)
                 for (r1, c1, r2, c2) in merges:
                     v = ""
                     if r1 < len(rows) and c1 < len(rows[r1]):
@@ -799,7 +856,9 @@ class xls_append:
         """
         Estrae da sheet openpyxl (griglia, merge, dimensioni).
 
-        Restituisce (rows, merges, col_widths, row_heights).
+        Restituisce (rows, merges, col_widths, row_heights, errore):
+        l'errore non e' mai silenziato, va a video e nel log
+        via sequenza chiamante.
         """
         sProc = "grid_from_openpyxl"
         print("Sto eseguendo " + sProc)
@@ -821,9 +880,9 @@ class xls_append:
             row_heights = {nI: d.height for nI, d in
                            ws_in.row_dimensions.items()
                            if d.height is not None}
-            return (rows, merges, col_widths, row_heights)
-        except Exception:
-            return ([], [], {}, {})
+            return (rows, merges, col_widths, row_heights, "")
+        except Exception as e:
+            return ([], [], {}, {}, ErrorProc(str(e), sProc))
 
     def grid_from_xlrd(self, sFile: str, sSheet: str) -> tuple:
         """
@@ -860,7 +919,8 @@ class xls_append:
 
     def xls_sheet_append(self) -> str:
         """
-        Copia SHEET.IN da FILE.IN.SHEET in FILE.OUT.XLS e salva.
+        Copia SHEET.IN da FILE.IN.SHEET in FILE.OUT.XLS e salva
+        (solo valori, mai formule: incolla-valori).
 
         Output xlsx via openpyxl (vale anche con sorgente xls, solo valori);
         output xls via xlwt riscrivendo tutti gli sheet della base.
@@ -874,7 +934,7 @@ class xls_append:
                 if self.is_xlsx(self.in_sheet_file):
                     from openpyxl import load_workbook
                     wb_in = load_workbook(NormalizePath(self.in_sheet_file),
-                                          data_only=False)
+                                          data_only=True)
                     ws_in = None
                     for sName in wb_in.sheetnames:
                         if sName.lower() == self.in_sheet_name.lower():
@@ -884,8 +944,10 @@ class xls_append:
                         sResult = ("Non trovato " + self.in_sheet_name
                                    + " nel file " + self.in_sheet_file)
                         return ErrorProc(sResult, sProc)
-                    self.num_righe_copiate = self.copy_openpyxl(
+                    self.num_righe_copiate, sErr = self.copy_openpyxl(
                         ws_in, self.ws_out)
+                    if sErr:
+                        return ErrorProc(sErr, sProc)
                 else:
                     nRows, sErr = self.copy_xlrd_to_openpyxl(
                         self.in_sheet_file, self.in_sheet_name, self.ws_out)
@@ -900,7 +962,7 @@ class xls_append:
                 if self.is_xlsx(self.in_sheet_file):
                     from openpyxl import load_workbook
                     wb_in = load_workbook(NormalizePath(self.in_sheet_file),
-                                          data_only=False)
+                                          data_only=True)
                     ws_in = None
                     for sName in wb_in.sheetnames:
                         if sName.lower() == self.in_sheet_name.lower():
@@ -910,7 +972,10 @@ class xls_append:
                         sResult = ("Non trovato " + self.in_sheet_name
                                    + " nel file " + self.in_sheet_file)
                         return ErrorProc(sResult, sProc)
-                    rows, merges, col_w, row_h = self.grid_from_openpyxl(ws_in)
+                    rows, merges, col_w, row_h, sErr = \
+                        self.grid_from_openpyxl(ws_in)
+                    if sErr:
+                        return ErrorProc(sErr, sProc)
                 else:
                     rows, merges, col_w, row_h, sErr = self.grid_from_xlrd(
                         self.in_sheet_file, self.in_sheet_name)
@@ -919,7 +984,7 @@ class xls_append:
                 bReplaced = False
                 booksheets_new = []
                 for (sTitle, bRows, bMerges, bCw, bRh) in booksheets:
-                    if sTitle.lower() == self.in_sheet_name.lower():
+                    if sTitle.lower() == self.out_sheet_name.lower():
                         booksheets_new.append(
                             (sTitle, rows, merges, col_w, row_h))
                         bReplaced = True
@@ -927,7 +992,7 @@ class xls_append:
                         booksheets_new.append((sTitle, bRows, bMerges, bCw, bRh))
                 if not bReplaced:
                     booksheets_new.append(
-                        (self.in_sheet_name, rows, merges, col_w, row_h))
+                        (self.out_sheet_name, rows, merges, col_w, row_h))
                 sResult = self.write_xlwt(sOut, booksheets_new)
                 if sResult:
                     return ErrorProc(sResult, sProc)
@@ -1006,9 +1071,16 @@ def cmd_xls_append(dictJob: Dict[str, str]) -> str:
     return ErrorProc(sResult, sProc)
 
 
+_DB_COMMANDS = ("DB.OPEN", "DB.CREATE", "DB.CLOSE",
+                 "SQL.EXEC", "TAB.ZAP", "TAB.CREATE.JSON",
+                 "DB.IMPORT", "DB.EXPORT")
+
+
 def cbCommands(dictJob: Dict[str, str]) -> str:
     """
     Dispatcher dei comandi: instrada COMMAND alla funzione dedicata.
+
+    Comandi DB.* in ntj_fact_db.py (vedi prompt_ntj_fact_db.md).
     """
     sProc = "cbCommands"
     print("Sto eseguendo " + sProc)
@@ -1019,6 +1091,11 @@ def cbCommands(dictJob: Dict[str, str]) -> str:
             sResult = cmd_xls_tab_merge(dictJob)
         elif sCommand == "XLS.SHEET.APPEND":
             sResult = cmd_xls_append(dictJob)
+        elif sCommand in _DB_COMMANDS:
+            if _db_module_available:
+                sResult = ntj_fact_db.cbCommands_db(dictJob)
+            else:
+                sResult = "Modulo ntj_fact_db non disponibile"
         elif not sCommand:
             sResult = "COMMAND non precisato"
         else:
@@ -1030,7 +1107,8 @@ def cbCommands(dictJob: Dict[str, str]) -> str:
 
 def main() -> None:
     """
-    Flusso ntJobsApp: Start, Run dei job, End con scrittura del .end.
+    Flusso ntJobsApp: Start, Run dei job, End con scrittura del .end,
+    cleanup DB se ntj_fact_db.py e' stato usato.
     """
     sProc = "main"
     print("Sto eseguendo " + sProc)
@@ -1042,6 +1120,11 @@ def main() -> None:
             return
         sResult = jData.Run(cbCommands)
         jData.End(sResult)
+        # Cleanup DB se il modulo e' stato usato
+        if _db_module_available and ntj_fact_db.is_db_used():
+            sClean = ntj_fact_db.db_cleanup_all()
+            if sClean:
+                print(sClean)
     except Exception as e:
         sResult = ErrorProc(str(e), sProc)
         print(sResult)
