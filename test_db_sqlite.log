@@ -1,0 +1,52 @@
+20261008:141439:info: 
+20261008:141439:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141439, Risultato: 
+20261008:141439:info: DB <TEST> creato (file test_db.sqlite)
+20261008:141439:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141439, Risultato: 
+20261008:141439:info: Eseguo il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141439, Risultato: 
+20261008:141439:info: DB <TEST> aperto (SQLITE)
+20261008:141439:info: Eseguito il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141439, Risultato: 
+20261008:141439:info: Eseguo il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:141439, Risultato: 
+20261008:141439:info: Tabella test_cf creata
+20261008:141439:info: Eseguito il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:141439, Risultato: 
+20261008:141439:info: Eseguo il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:141439, Risultato: 
+20261008:141440:info: Import CSV test_cf_dati.csv in test_cf (5 righe)
+20261008:141440:info: Eseguito il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Eseguo il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Eseguito SQL (1 righe)
+20261008:141440:info: Eseguito il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Eseguo il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Export CSV test_db_sqlite.csv (4 righe)
+20261008:141440:info: Eseguito il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Eseguo il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:141440, Risultato: 
+20261008:141440:info: DB <TEST> chiuso
+20261008:141440:info: Eseguito il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Eseguo il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:141440, Risultato: 
+20261008:141440:info: Compattato test_db.sqlite (SQLITE): 12288 -> 12288 byte
+20261008:141440:info: Eseguito il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:141440, Risultato: 
+20261008:141440: Fine applicazione NTJ_FACT_TEST_DB_SQLITE
+20261008:143132:info: 
+20261008:143132:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:143132, Risultato: 
+20261008:143132:info: DB <TEST> esiste gia' (file test_db.sqlite)
+20261008:143132:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:143132, Risultato: 
+20261008:143132:info: DB <TEST> aperto (SQLITE)
+20261008:143132:info: Eseguito il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Tabella test_cf creata
+20261008:143132:info: Eseguito il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Import CSV test_cf_dati.csv in test_cf (5 righe)
+20261008:143132:info: Eseguito il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguito SQL (1 righe)
+20261008:143132:info: Eseguito il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Export CSV test_db_sqlite.csv (4 righe)
+20261008:143132:info: Eseguito il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:143132, Risultato: 
+20261008:143132:info: DB <TEST> chiuso
+20261008:143132:info: Eseguito il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Eseguo il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:143132, Risultato: 
+20261008:143132:info: Compattato test_db.sqlite (SQLITE): 12288 -> 12288 byte
+20261008:143132:info: Eseguito il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:143132, Risultato: 
+20261008:143132: Fine applicazione NTJ_FACT_TEST_DB_SQLITE

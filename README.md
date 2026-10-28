@@ -13,8 +13,9 @@ For a full explanation of what a ntJobsApp is (INI in, `.end` INI out, exit code
 
 Scope: manipulate data automatically — **not** import/export interactively.
 Data files: XLS/XLSX (Excel), CSV, JSON, XML, TXT, SQL.
-Databases: `SQLITE`, `ACCESS`, `ORACLE`, `POSTGRES`, `MARIADB` (drivers:
-stdlib `sqlite3`, `pyodbc`, `oracledb`, `psycopg`, `pymysql`).
+Databases: `SQLITE`, `ACCESS`, `SQLSERVER`, `ORACLE`, `POSTGRES`,
+`MARIADB` (drivers: stdlib `sqlite3`, `pyodbc` (ACCESS, SQLSERVER),
+`oracledb`, `psycopg`, `pymysql`).
 
 ### INI structure
 ```ini
@@ -77,8 +78,10 @@ and row/column sizes. Destination sheet QueryTables are normalized to plain tabl
 
 ### Commands — databases (`ntj_fact_db.py`, spec: `prompt_ntj_fact_db.md`)
 
-Each DB is declared once as `[DB_<ID>]` (`TYPE`, `PATH` or `HOST`/`PORT`/…,
-optional `TIMEOUT`/`READONLY`, `$ENV.` recommended for `PASSWORD`).
+Each DB is opened by a `DB.OPEN` job holding all its params (`DB.ID` unique,
+`TYPE`, plus type-specific fields: `FILE.IN.DB` if file and must exist,
+`HOST`/`PORT`/`SERVICE`, `DBNAME`/`USER`/`PASSWORD`, …; optional
+`TIMEOUT`/`READONLY`, `$ENV.` recommended for `PASSWORD`).
 Open DBs stay open across jobs (multiple DBs can be open); any still open
 at end of run are closed automatically. A command on a non-open DB fails
 with `DB <id> non aperto (manca DB.OPEN)`.
@@ -94,7 +97,7 @@ then stays closed. Already exists = INFO, not an error.
 a non-open DB is an error.
 
 **`SQL.EXEC`** — run ONE statement: `DB.ID=<id>`, `SQL=<statement>` xor
-`SQL.FILE=<file.sql>` (exactly one). DDL/DML/DCL/SELECT allowed; no
+`FILE.IN.SQL=<file.sql>` (exactly one). DDL/DML/DCL/SELECT allowed; no
 multi-statement. `SELECT` without `FILE.OUT.XLS` returns only the rowcount;
 with `FILE.OUT.XLS` (`.xls`/`.xlsx`) writes the rows + `RETURN.FILE.XLS`.
 Returns rows (`RETURN.VALUE`).
@@ -122,6 +125,11 @@ Returns loaded rows.
 (SELECT only), `FILE.OUT.QUERY=<f>`, `OUT.TYPE=CSV|JSON` (required; extension
 must match). CSV: `;` delimiter, header; JSON: array of objects.
 Returns rows + `RETURN.FILE.QUERY`.
+
+**`DB.COMPACT`** — compact a database file: `FILE.IN.DB=<f>` (`.db`/`.sqlite`
+→ SQLITE via `VACUUM`, `.mdb`/`.accdb` → ACCESS via DAO/JRO on Windows).
+First creates `<f>.old` backup (overwrites), then compacts. The file must not
+be open (`DB.CLOSE` first). Returns reclaimed bytes.
 
 ### Usage
 ```cmd
@@ -157,13 +165,11 @@ FILE.OUT.XLS=UTENTI_MACH0_CMLTV.XLSX
 
 Example DB jobs:
 ```ini
-[DB_ANAG]
-TYPE=SQLITE
-PATH=K:\dati\anag.db
-
 [JOB_OPEN]
 COMMAND=DB.OPEN
 DB.ID=ANAG
+TYPE=SQLITE
+FILE.IN.DB=K:\dati\anag.db
 
 [JOB_LOAD]
 COMMAND=DB.IMPORT
@@ -202,8 +208,9 @@ exit code, orchestrazione `acJobsApp`), vedi **https://github.com/ntgcorp/ntJobs
 
 Scopo: manipolare automaticamente i dati — **non** importarli/esportarli a mano.
 File di dati: XLS/XLSX (Excel), CSV, JSON, XML, TXT, SQL.
-Database: `SQLITE`, `ACCESS`, `ORACLE`, `POSTGRES`, `MARIADB` (driver:
-`sqlite3` stdlib, `pyodbc`, `oracledb`, `psycopg`, `pymysql`).
+Database: `SQLITE`, `ACCESS`, `SQLSERVER`, `ORACLE`, `POSTGRES`,
+`MARIADB` (driver: `sqlite3` stdlib, `pyodbc` (ACCESS, SQLSERVER),
+`oracledb`, `psycopg`, `pymysql`).
 
 ### Struttura INI
 ```ini
@@ -267,9 +274,11 @@ a tabelle semplici.
 
 ### Comandi — database (`ntj_fact_db.py`, specifica: `prompt_ntj_fact_db.md`)
 
-Ogni DB è dichiarato una volta come `[DB_<ID>]` (`TYPE`, `PATH` oppure
-`HOST`/`PORT`/…, opzionali `TIMEOUT`/`READONLY`, `$ENV.` raccomandato per
-`PASSWORD`). I DB aperti restano aperti tra i job (più DB aperti insieme);
+Ogni DB è aperto da un job `DB.OPEN` con tutti i suoi parametri (`DB.ID` univoco,
+`TYPE`, più i campi specifici del tipo: `FILE.IN.DB` se file e deve esistere,
+`HOST`/`PORT`/`SERVICE`, `DBNAME`/`USER`/`PASSWORD`, …; opzionali
+`TIMEOUT`/`READONLY`, `$ENV.` raccomandato per `PASSWORD`).
+I DB aperti restano aperti tra i job (più DB aperti insieme);
 quelli ancora aperti a fine run sono chiusi in automatico. Un comando su
 DB non aperto fallisce con `DB <id> non aperto (manca DB.OPEN)`.
 
@@ -284,7 +293,7 @@ poi resta chiuso. Esiste già = INFO, non errore.
 Chiudere un DB non aperto è errore.
 
 **`SQL.EXEC`** — esegue UN solo statement: `DB.ID=<id>`, `SQL=<statement>` xor
-`SQL.FILE=<file.sql>` (esattamente uno). Ammessi DDL/DML/DCL/SELECT; niente
+`FILE.IN.SQL=<file.sql>` (esattamente uno). Ammessi DDL/DML/DCL/SELECT; niente
 multi-statement. `SELECT` senza `FILE.OUT.XLS` ritorna solo il conteggio;
 con `FILE.OUT.XLS` (`.xls`/`.xlsx`) scrive le righe + `RETURN.FILE.XLS`.
 Ritorna le righe (`RETURN.VALUE`).
@@ -311,6 +320,11 @@ colonne lette dalla tabella esistente (tutte nullable). Ritorna le righe caricat
 (solo `SELECT`), `FILE.OUT.QUERY=<f>`, `OUT.TYPE=CSV|JSON` (obbligatorio;
 estensione deve coincidere). CSV: delimitatore `;`, header; JSON: array di
 oggetti. Ritorna righe + `RETURN.FILE.QUERY`.
+
+**`DB.COMPACT`** — compatta un file database: `FILE.IN.DB=<f>` (`.db`/`.sqlite`
+→ SQLITE via `VACUUM`, `.mdb`/`.accdb` → ACCESS via DAO/JRO su Windows).
+Prima crea backup `<f>.old` (sovrascrive), poi compatta. Il file non deve
+essere aperto (`DB.CLOSE` prima). Ritorna i byte recuperati.
 
 ### Uso
 ```cmd
@@ -346,13 +360,11 @@ FILE.OUT.XLS=UTENTI_MACH0_CMLTV.XLSX
 
 Esempio job DB:
 ```ini
-[DB_ANAG]
-TYPE=SQLITE
-PATH=K:\dati\anag.db
-
 [JOB_OPEN]
 COMMAND=DB.OPEN
 DB.ID=ANAG
+TYPE=SQLITE
+FILE.IN.DB=K:\dati\anag.db
 
 [JOB_LOAD]
 COMMAND=DB.IMPORT

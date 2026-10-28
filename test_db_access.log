@@ -1,0 +1,80 @@
+20261008:141036:info: 
+20261008:141036:command non trovato in db_test: 
+20261008:141036:command non trovato in db_test: Fine applicazione NTJ_FACT_TEST_DB_ACCESS
+20261008:141123:info: 
+20261008:141123:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141123, Risultato: 
+20261008:141123:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141123, Risultato: cbCommands: Errore cmd_db_create: Errore DB <TEST> non definito in INI
+20261008:141123:cbcommands: errore cmd_db_create: errore db <test> non definito in ini: Fine applicazione NTJ_FACT_TEST_DB_ACCESS
+20261008:141241:info: 
+20261008:141241:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141241, Risultato: 
+20261008:141241:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141241, Risultato: cbCommands: Errore cmd_db_create: Errore (-2147352567, 'Eccezione.', (0, 'Microsoft Access Database Engine', 'Database già esistente.', None, 5003204, -2147217897), None)
+20261008:141241:cbcommands: errore cmd_db_create: errore (-2147352567, 'eccezione.', (0, 'microsoft access database engine', 'database già esistente.', none, 5003204, -2147217897), none): Fine applicazione NTJ_FACT_TEST_DB_ACCESS
+20261008:141308:info: 
+20261008:141308:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141308, Risultato: 
+20261008:141308:info: DB <TEST> esiste gia' (ACCESS)
+20261008:141308:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141308, Risultato: 
+20261008:141308:info: Eseguo il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141308, Risultato: 
+20261008:141309:info: Eseguito il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141309, Risultato: cbCommands: Errore cmd_db_open: Errore ('HY000', '[HY000] [Microsoft][Driver ODBC Microsoft Access] Nome file non valido. (-1044) (SQLDriverConnect); [HY000] [Microsoft][Driver Manager ODBC] Funzione SQLSetConnectAttr del driver non riuscita. (0); [HY000] [Microsoft][Driver ODBC Microsoft Access] Nome file non valido. (-1044)')
+20261008:141309:cbcommands: errore cmd_db_open: errore ('hy000', '[hy000] [microsoft][driver odbc microsoft access] nome file non valido. (-1044) (sqldriverconnect); [hy000] [microsoft][driver manager odbc] funzione sqlsetconnectattr del driver non riuscita. (0); [hy000] [microsoft][driver odbc microsoft access] nome file non valido. (-1044)'): Fine applicazione NTJ_FACT_TEST_DB_ACCESS
+20261008:141339:info: 
+20261008:141339:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141339, Risultato: 
+20261008:141339:info: DB <TEST> esiste gia' (ACCESS)
+20261008:141339:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141339, Risultato: 
+20261008:141339:info: Eseguo il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141339, Risultato: 
+20261008:141339:info: DB <TEST> aperto (ACCESS)
+20261008:141339:info: Eseguito il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141339, Risultato: 
+20261008:141339:info: Eseguo il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:141339, Risultato: 
+20261008:141339:info: Eseguito il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:141339, Risultato: cbCommands: Errore cmd_tab_create_json: Errore ('42S02', "[42S02] [Microsoft][Driver ODBC Microsoft Access] Impossibile trovare la tabella o la query di input 'test_cf'. Verificare che esista e che il nome sia stato digitato correttamente. (-1305) (SQLExecDirectW)")
+20261008:141339:cbcommands: errore cmd_tab_create_json: errore ('42s02', "[42s02] [microsoft][driver odbc microsoft access] impossibile trovare la tabella o la query di input 'test_cf'. verificare che esista e che il nome sia stato digitato correttamente. (-1305) (sqlexecdirectw)"): Fine applicazione NTJ_FACT_TEST_DB_ACCESS
+20261008:141427:info: 
+20261008:141427:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141427, Risultato: 
+20261008:141427:info: DB <TEST> esiste gia' (ACCESS)
+20261008:141427:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:141427, Risultato: 
+20261008:141427:info: Eseguo il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141427, Risultato: 
+20261008:141428:info: DB <TEST> aperto (ACCESS)
+20261008:141428:info: Eseguito il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguo il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Tabella test_cf creata
+20261008:141428:info: Eseguito il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguo il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Import CSV test_cf_dati.csv in test_cf (5 righe)
+20261008:141428:info: Eseguito il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguo il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguito SQL (1 righe)
+20261008:141428:info: Eseguito il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguo il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Export CSV test_db.csv (4 righe)
+20261008:141428:info: Eseguito il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguo il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:141428, Risultato: 
+20261008:141428:info: DB <TEST> chiuso
+20261008:141428:info: Eseguito il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Eseguo il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:141428, Risultato: 
+20261008:141428:info: Compattato test_db.accdb (ACCESS): 188416 -> 188416 byte
+20261008:141428:info: Eseguito il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:141428, Risultato: 
+20261008:141428: Fine applicazione NTJ_FACT_TEST_DB_ACCESS
+20261008:143129:info: 
+20261008:143129:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:143129, Risultato: 
+20261008:143129:info: DB <TEST> esiste gia' (ACCESS)
+20261008:143129:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261008:143129, Risultato: 
+20261008:143129:info: Eseguo il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:143129, Risultato: 
+20261008:143130:info: DB <TEST> aperto (ACCESS)
+20261008:143130:info: Eseguito il comando: DB.OPEN, Sezione : JOB_OPEN, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguo il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Tabella test_cf creata
+20261008:143130:info: Eseguito il comando: TAB.CREATE.JSON, Sezione : JOB_CREATE_TAB, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguo il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Import CSV test_cf_dati.csv in test_cf (5 righe)
+20261008:143130:info: Eseguito il comando: DB.IMPORT, Sezione : JOB_IMPORT, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguo il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguito SQL (1 righe)
+20261008:143130:info: Eseguito il comando: SQL.EXEC, Sezione : JOB_DELETE_ONE, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguo il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Export CSV test_db.csv (4 righe)
+20261008:143130:info: Eseguito il comando: DB.EXPORT, Sezione : JOB_EXPORT, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguo il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:143130, Risultato: 
+20261008:143130:info: DB <TEST> chiuso
+20261008:143130:info: Eseguito il comando: DB.CLOSE, Sezione : JOB_CLOSE, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Eseguo il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:143130, Risultato: 
+20261008:143130:info: Compattato test_db.accdb (ACCESS): 188416 -> 188416 byte
+20261008:143130:info: Eseguito il comando: DB.COMPACT, Sezione : JOB_COMPACT, TS: 20261008:143130, Risultato: 
+20261008:143131: Fine applicazione NTJ_FACT_TEST_DB_ACCESS

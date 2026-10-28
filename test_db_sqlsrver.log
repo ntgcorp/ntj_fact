@@ -1,0 +1,4 @@
+20261028:220311:info: 
+20261028:220311:info: Eseguo il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261028:220311, Risultato: 
+20261028:220311:info: Eseguito il comando: DB.CREATE, Sezione : JOB_CREATE_DB, TS: 20261028:220311, Risultato: cbCommands: Errore cmd_db_create: Errore ('IM002', '[IM002] [Microsoft][Driver Manager ODBC] Nome origine dati non trovato e driver predefinito non specificato. (0) (SQLDriverConnect)')
+20261028:220311:cbcommands: errore cmd_db_create: errore ('im002', '[im002] [microsoft][driver manager odbc] nome origine dati non trovato e driver predefinito non specificato. (0) (sqldriverconnect)'): Fine applicazione NTJ_FACT_TEST_DB_SQLSRVER

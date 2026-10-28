@@ -7,7 +7,8 @@ Contesto ntJobsApp e convenzioni: Prompt_ntjobsapp_light.md.
 
 Comandi file: XLS.TAB.MERGE, XLS.SHEET.APPEND.
 Comandi database (se ntj_fact_db.py importato): DB.OPEN, DB.CREATE, DB.CLOSE,
-SQL.EXEC, TAB.ZAP, TAB.CREATE.JSON, IMPORT. Vedi prompt_ntj_fact_db.md.
+SQL.EXEC, TAB.ZAP, TAB.CREATE.JSON, DB.IMPORT, DB.EXPORT, DB.COMPACT.
+Vedi prompt_ntj_fact_db.md.
 
 Uso:
     python ntj_fact.py <file_job.ini>
@@ -1073,7 +1074,7 @@ def cmd_xls_append(dictJob: Dict[str, str]) -> str:
 
 _DB_COMMANDS = ("DB.OPEN", "DB.CREATE", "DB.CLOSE",
                  "SQL.EXEC", "TAB.ZAP", "TAB.CREATE.JSON",
-                 "DB.IMPORT", "DB.EXPORT")
+                 "DB.IMPORT", "DB.EXPORT", "DB.COMPACT")
 
 
 def cbCommands(dictJob: Dict[str, str]) -> str:
@@ -1105,30 +1106,119 @@ def cbCommands(dictJob: Dict[str, str]) -> str:
     return ErrorProc(sResult, sProc)
 
 
+def ShowHelp() -> str:
+    """
+    Stampa l'help dei comandi quando il programma e' richiesto senza parametri.
+
+    Preambolo di ntJobsApp (vedi manuale README.MD e Prompt_ntj_fact.md),
+    poi elenco dei COMMAND specifici di ntj_fact con i loro parametri.
+    """
+    sProc = "ShowHelp"
+    print("Sto eseguendo " + sProc)
+    sResult = ""
+    sHelp = """
+ntj_fact - ntJobsApp per manipolazione dati batch (XLS/XLSX/CSV/JSON/XML/TXT/SQL + database)
+Vedi manuale README.MD e specifica Prompt_ntj_fact.md (file) / prompt_ntj_fact_db.md (database).
+
+Uso: ntj_fact.py <job.ini>   (run con CWD = cartella dell'ini)
+
+I comandi sono richiamati da sezioni [JOB_<...>] dell'ini con chiave COMMAND=<comando>.
+Tutti i file input iniziano per FILE.IN.*, i file output per FILE.OUT.*
+(vengono scritti come ritorno RETURN.FILE.* nel report di fine run).
+
+FILE COMMANDS:
+
+  XLS.TAB.MERGE - fonde in un file unico le righe di piu' sheet con header identico
+    FILE.IN.SHEETS.TXT  file lista di input (un percorso Excel per riga)
+    SHEET.OUT           nome dello sheet da fondere, stesso in tutti i file
+    FILE.OUT.XLS        file di output (.xls o .xlsx)
+
+  XLS.SHEET.APPEND - copia (solo valori, mai formule) le righe di uno sheet
+                     sorgente in uno sheet del file di base
+    FILE.IN.XLS         file Excel di base (deve esistere)
+    FILE.IN.SHEET       file sorgente (deve esistere)
+    SHEET.IN            nome sheet sorgente da leggere
+    SHEET.OUT           opzionale, sheet di destinazione (default SHEET.IN)
+    FILE.OUT.XLS        file di output (.xls o .xlsx)
+
+DATABASE COMMANDS (modulo ntj_fact_db, vedi prompt_ntj_fact_db.md):
+
+  DB.OPEN - apre una connessione al database e registra l'id nel dizionario
+    DB.ID               id univoco (solo [A-Z0-9_])
+    TYPE                SQLITE | ACCESS | SQLSERVER | ORACLE | POSTGRES | MARIADB
+    SQLITE/ACCESS       FILE.IN.DB (il file deve esistere)
+    ORACLE              HOST + SERVICE (oppure TNSNAME) + USER + PASSWORD
+    POSTGRES/MARIADB    DBNAME + USER + PASSWORD (+ HOST, PORT)
+    SQLSERVER           DBNAME (+ HOST, PORT; USER/PASSWORD opz.: se assenti
+                        autenticazione Windows dell'utente corrente)
+    Comuni: TIMEOUT (default 30), READONLY (default FALSE)
+
+  DB.CREATE - crea il database se mancante e lo registra chiuso (come DB.OPEN)
+
+  DB.CLOSE - chiude un database aperto
+    DB.ID               id dal dizionario
+
+  SQL.EXEC - esegue una sql: SELECT (opzionalmente verso Excel) o DML
+    DB.ID               id dal dizionario
+    SQL oppure FILE.IN.SQL      testo sql oppure file sql (xor: solo uno)
+    FILE.OUT.XLS        opzionale, output della SELECT (.xls/.xlsx)
+
+  TAB.ZAP - svuota una tabella (sempre DELETE FROM, mai TRUNCATE)
+    DB.ID               id dal dizionario
+    TABLE               nome della tabella
+
+  TAB.CREATE.JSON - crea una tabella da struttura JSON
+    DB.ID               id dal dizionario
+    FILE.IN.STRUCT      struttura JSON della tabella (vedi prompt_ntj_fact_db.md)
+
+  DB.IMPORT - importa dati da file(csv/json) in una tabella
+    DB.ID               id dal dizionario
+    FILE.IN.CSV oppure FILE.IN.JSON   file input (xor)
+    FILE.IN.STRUCT      opzionale, struttura colonne (default: introspezione)
+    TABLE               tabella (obbligatoria per JSON senza STRUCT)
+    MODE                APPEND (default) | REPLACE
+
+  DB.EXPORT - esporta una query in un file
+    DB.ID               id dal dizionario
+    OUT.QUERY           query da esportare (solo SELECT)
+    FILE.OUT.QUERY      file di output
+    OUT.TYPE            CSV | JSON (deve coincidere con l'estensione file)
+
+  DB.COMPACT - compatta un database a file (prima DB.CLOSE)
+    FILE.IN.DB          file SQLITE o ACCESS; crea backup <file>.old
+"""
+    print(sHelp.strip("\n"))
+    return sResult
+
+
 def main() -> None:
     """
-    Flusso ntJobsApp: Start, Run dei job, End con scrittura del .end,
-    cleanup DB se ntj_fact_db.py e' stato usato.
+    Flusso ntJobsApp: Start, Run dei job, End con scrittura del .end.
+
+    I DB aperti vengono chiusi d'ufficio (DB.CLOSE implicito) prima
+    dell'End, anche in caso di uscita per errore (mai leak di connessioni).
     """
     sProc = "main"
     print("Sto eseguendo " + sProc)
     sResult = ""
     try:
-        sResult = jData.Start()
-        if sResult:
-            jData.End(sResult)
+        if len(sys.argv) < 2:
+            # Richiamo senza parametri: help dei comandi, exit 0
+            ShowHelp()
             return
-        sResult = jData.Run(cbCommands)
-        jData.End(sResult)
-        # Cleanup DB se il modulo e' stato usato
+        sResult = jData.Start()
+        if not sResult:
+            sResult = jData.Run(cbCommands)
+    except Exception as e:
+        sResult = ErrorProc(str(e), sProc)
+        print(sResult)
+    finally:
+        # Chiusura di tutti i DB aperti prima dell'End (che esce su errore)
         if _db_module_available and ntj_fact_db.is_db_used():
             sClean = ntj_fact_db.db_cleanup_all()
             if sClean:
                 print(sClean)
-    except Exception as e:
-        sResult = ErrorProc(str(e), sProc)
-        print(sResult)
-        sys.exit(1)
+    jData.End(sResult)
 
 
 if __name__ == "__main__":

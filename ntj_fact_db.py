@@ -2,8 +2,10 @@
 ntj_fact_db.py - Gruppo comandi database per ntj_fact (ntJobsApp).
 
 Specifica: prompt_ntj_fact_db.md. Comandi: DB.OPEN, DB.CREATE, DB.CLOSE,
-SQL.EXEC, TAB.ZAP, TAB.CREATE.JSON, DB.IMPORT, DB.EXPORT. Tutti i comandi
-funzionano per TYPE: SQLITE, ACCESS, ORACLE, POSTGRES, MARIADB (driver specifici).
+SQL.EXEC, TAB.ZAP, TAB.CREATE.JSON, DB.IMPORT, DB.EXPORT, DB.COMPACT.
+Tutti i comandi funzionano
+per TYPE: SQLITE, ACCESS, SQLSERVER, ORACLE, POSTGRES, MARIADB
+(driver specifici).
 
 Regola nomi file: input aperti = FILE.IN.*, output creati = FILE.OUT.*.
 
@@ -16,20 +18,34 @@ import sys
 import json
 import csv
 import re
+import time
+import shutil
 from typing import Dict, List, Any, Optional, Tuple
 
 # Flag: True se almeno un comando DB e' stato eseguito in questo run
 _db_used = False
 
-# Config caricata dalle sezioni [DB_*]: True dopo _ensure_config()
-_db_built = False
-
-# Dizionario globale dei database: {ID: {"TYPE": ..., "HANDLE": conn o None, ...}}
+# Dizionario globale dei database: {ID: {TYPE, ..., HANDLE, STATUS}}.
+# Popolato da DB.OPEN (e DB.CREATE, chiuso) dai parametri del job.
+# STATUS vale "OPEN" o "CLOSE". Nessuna sezione [DB_*] in INI.
 dictDb: Dict[str, Dict[str, Any]] = {}
 
 
 def _jdata() -> Any:
-    """Ritorna jData di ntj_fact (import differito, niente cicli)."""
+    """Ritorna jData RUNNING (quello di __main__, non una copia fresca).
+
+    Attenzione: se ntj_fact.py gira come script, l'import qui dentro
+    ricaricherebbe il modulo con un jData vuoto separato. Si usa quindi
+    jData di __main__ quando disponibile, con fallback all'import.
+    """
+    try:
+        import sys as _sys
+        m = _sys.modules.get("__main__")
+        jd = getattr(m, "jData", None)
+        if jd is not None and hasattr(jd, "dictJobs"):
+            return jd
+    except Exception:
+        pass
     try:
         from ntj_fact import jData
         return jData
@@ -79,7 +95,7 @@ def _check_driver(db_type: str) -> str:
     try:
         if db_type == "SQLITE":
             import sqlite3  # noqa: F401
-        elif db_type == "ACCESS":
+        elif db_type in ("ACCESS", "SQLSERVER"):
             import pyodbc  # noqa: F401
         elif db_type == "ORACLE":
             import oracledb  # noqa: F401
@@ -103,15 +119,19 @@ def _db_connect(db_id: str, cfg: Dict[str, str]) -> Any:
     timeout = int(cfg.get("TIMEOUT", "30"))
     if db_type == "SQLITE":
         import sqlite3
-        path = cfg.get("PATH", "")
+        path = cfg.get("FILE.IN.DB", "")
         if not path:
-            raise ValueError("PATH mancante per SQLITE")
+            raise ValueError("FILE.IN.DB mancante per SQLITE")
         # READONLY gestito da chi chiama
         conn = sqlite3.connect(path, timeout=timeout)
         return conn
     elif db_type == "ACCESS":
         import pyodbc
-        path = cfg.get("PATH", "")
+        # Path assoluto: il driver ODBC non risolve i relativi in CWD.
+        # Pooling off: close() deve davvero disconnettere, altrimenti
+        # il file resta lockato (es. per DB.COMPACT successivo).
+        pyodbc.pooling = False
+        path = os.path.abspath(cfg.get("FILE.IN.DB", ""))
         driver = cfg.get("DRIVER", "Microsoft Access Driver (*.mdb, *.accdb)")
         uid = cfg.get("UID", "")
         pwd = cfg.get("PASSWORD", "")
@@ -120,6 +140,24 @@ def _db_connect(db_id: str, cfg: Dict[str, str]) -> Any:
             cs += f"UID={uid};"
         if pwd:
             cs += f"PWD={pwd};"
+        conn = pyodbc.connect(cs, timeout=timeout)
+        return conn
+    elif db_type == "SQLSERVER":
+        import pyodbc
+        host = cfg.get("HOST", "localhost")
+        port = cfg.get("PORT", "1433")
+        dbname = cfg.get("DBNAME", "master")
+        user = cfg.get("USER", "")
+        pwd = cfg.get("PASSWORD", "")
+        driver = cfg.get("DRIVER", "ODBC Driver 17 for SQL Server")
+        cs = (f"DRIVER={{{driver}}};SERVER={host},{port};"
+              f"DATABASE={dbname};")
+        if user:
+            cs += f"UID={user};PWD={pwd};"
+        else:
+            # Senza USER: autenticazione Windows dell'utente corrente
+            cs += "Trusted_Connection=yes;"
+        cs += "TrustServerCertificate=yes;"
         conn = pyodbc.connect(cs, timeout=timeout)
         return conn
     elif db_type == "ORACLE":
@@ -177,7 +215,7 @@ def _quote_ident(db_type: str, name: str) -> str:
         raise ValueError(f"Nome non valido: {name}")
     if db_type in ("SQLITE", "ORACLE", "POSTGRES"):
         return f'"{name}"'
-    elif db_type == "ACCESS":
+    elif db_type in ("ACCESS", "SQLSERVER"):
         return f"[{name}]"
     elif db_type == "MARIADB":
         return f"`{name}`"
@@ -187,7 +225,7 @@ def _quote_ident(db_type: str, name: str) -> str:
 
 def _placeholder(db_type: str, idx: int) -> str:
     """Restituisce placeholder per TYPE (idx 1-based per ORACLE)."""
-    if db_type in ("SQLITE", "ACCESS"):
+    if db_type in ("SQLITE", "ACCESS", "SQLSERVER"):
         return "?"
     elif db_type == "ORACLE":
         return f":{idx}"
@@ -206,9 +244,17 @@ def _tab_exists(conn: Any, db_type: str, table: str) -> bool:
                 "SELECT COUNT(*) FROM sqlite_master "
                 "WHERE type='table' AND name=?", (table,))
         elif db_type == "ACCESS":
-            # Probe con SELECT COUNT(*) (MSysObjects spesso negato)
-            q = f"SELECT COUNT(*) FROM {_quote_ident(db_type, table)}"
-            cur.execute(q)
+            # Probe con SELECT COUNT(*) (MSysObjects spesso negato).
+            # Tabella mancante = eccezione driver -> False (non esiste).
+            try:
+                q = f"SELECT COUNT(*) FROM {_quote_ident(db_type, table)}"
+                cur.execute(q)
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return False
         elif db_type == "ORACLE":
             cur.execute(
                 "SELECT COUNT(*) FROM user_tables "
@@ -217,6 +263,10 @@ def _tab_exists(conn: Any, db_type: str, table: str) -> bool:
             cur.execute(
                 "SELECT COUNT(*) FROM information_schema.tables "
                 "WHERE table_name = %s", (table,))
+        elif db_type == "SQLSERVER":
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_name = ?", (table,))
         elif db_type == "MARIADB":
             cur.execute(
                 "SELECT COUNT(*) FROM information_schema.tables "
@@ -298,6 +348,23 @@ def _type_to_ddl(db_type: str, col: Dict[str, Any]) -> str:
             base = "BOOLEAN"
         else:
             base = "TEXT"
+    elif db_type == "SQLSERVER":
+        if t_neu == "INTEGER" and pk and auto:
+            base = "INT IDENTITY(1,1) PRIMARY KEY"
+        elif t_neu == "INTEGER":
+            base = "INT"
+        elif t_neu == "TEXT":
+            base = f"VARCHAR({size})" if size else "VARCHAR(255)"
+        elif t_neu.startswith("DECIMAL"):
+            base = f"DECIMAL({size})" if size else "DECIMAL(18,2)"
+        elif t_neu == "DATE":
+            base = "DATE"
+        elif t_neu == "DATETIME":
+            base = "DATETIME2"
+        elif t_neu == "BOOLEAN":
+            base = "BIT"
+        else:
+            base = "VARCHAR(255)"
     elif db_type == "MARIADB":
         if t_neu == "INTEGER" and pk and auto:
             base = "INT AUTO_INCREMENT PRIMARY KEY"
@@ -327,104 +394,104 @@ def _type_to_ddl(db_type: str, col: Dict[str, Any]) -> str:
 # COMANDI DB.*
 # =============================================================================
 
-_DB_TYPES = ("SQLITE", "ACCESS", "ORACLE", "POSTGRES", "MARIADB")
-
-
-def _ensure_config() -> str:
-    """Popola dictDb dalle sezioni [DB_*] di jData.dictJobs (una volta sola)."""
-    global _db_built, dictDb
-    sProc = "_ensure_config"
-    try:
-        if _db_built:
-            return ""
-        jd = _jdata()
-        if jd is None:
-            return "contesto ntj_fact non disponibile"
-        jobs = jd.dictJobs or {}
-        for sec, vals in jobs.items():
-            sSec = str(sec).upper()
-            if not sSec.startswith("DB_") or len(sSec) <= 3:
-                continue
-            db_id = sSec[3:]
-            if not re.match(r"^[A-Z0-9_]+$", db_id):
-                return f"ID DB non valido in [{sec}]"
-            cfg = {str(k).upper(): v for k, v in (vals or {}).items()}
-            if "HANDLE" in cfg or "STATUS" in cfg:
-                return f"chiavi riservate HANDLE/STATUS in [{sec}]"
-            db_type = str(cfg.get("TYPE", "")).strip().upper()
-            if not db_type:
-                return f"TYPE mancante in [{sec}]"
-            if db_type not in _DB_TYPES:
-                return f"TYPE sconosciuto in [{sec}]: {db_type}"
-            cfg["TYPE"] = db_type
-            if db_type in ("SQLITE", "ACCESS") and not str(cfg.get("PATH", "")).strip():
-                return f"PATH mancante in [{sec}]"
-            if db_type == "ORACLE":
-                if not (str(cfg.get("TNSNAME", "")).strip() or
-                        (str(cfg.get("HOST", "")).strip() and
-                         str(cfg.get("SERVICE", "")).strip())):
-                    return (f"HOST+SERVICE o TNSNAME obbligatori in [{sec}]")
-                if not str(cfg.get("USER", "")).strip():
-                    return f"USER mancante in [{sec}]"
-            if db_type in ("POSTGRES", "MARIADB"):
-                if not str(cfg.get("DBNAME", "")).strip():
-                    return f"DBNAME mancante in [{sec}]"
-                if not str(cfg.get("USER", "")).strip():
-                    return f"USER mancante in [{sec}]"
-            cfg["HANDLE"] = None
-            cfg["STATUS"] = "CLOSE"
-            dictDb[db_id] = cfg
-        _db_built = True
-        return ""
-    except Exception as e:
-        return f"{sProc}: Errore {e}"
+_DB_TYPES = ("SQLITE", "ACCESS", "ORACLE", "POSTGRES", "MARIADB",
+             "SQLSERVER")
 
 
 def _db_cfg(db_id: str, need_open: bool) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """Ensure config + risolve ID. Ritorna (errore, cfg|None)."""
-    sErr = _ensure_config()
-    if sErr:
-        return (sErr, None)
+    """Risolve ID in dictDb (popolato da DB.OPEN). Ritorna (errore, cfg|None)."""
     db_id = str(db_id or "").strip().upper()
     if not db_id:
         return ("DB.ID non precisato", None)
     if db_id not in dictDb:
-        return (f"DB <{db_id}> non definito in INI", None)
+        return (f"DB <{db_id}> non definito (manca DB.OPEN con parametri)", None)
     cfg = dictDb[db_id]
-    if need_open and cfg.get("HANDLE") is None:
+    if need_open and cfg.get("STATUS") != "OPEN":
         return (f"DB <{db_id}> non aperto (manca DB.OPEN)", None)
     return ("", cfg)
 
+
+def _read_db_params(dictJob: Dict[str, str]
+                    ) -> Tuple[str, str, Dict[str, Any]]:
+    """Legge+valida DB.ID/TYPE/parametri da job. Ritorna (errore, id, cfg)."""
+    sProc = "_read_db_params"
+    try:
+        db_id = str(dictJob.get("DB.ID", "")).strip().upper()
+        if not db_id:
+            return ("DB.ID non precisato", "", {})
+        if not re.match(r"^[A-Z0-9_]+$", db_id):
+            return (f"DB.ID non valido: {db_id}", "", {})
+        db_type = str(dictJob.get("TYPE", "")).strip().upper()
+        if not db_type:
+            return ("TYPE non precisato", "", {})
+        if db_type not in _DB_TYPES:
+            return (f"TYPE sconosciuto: {db_type}", "", {})
+        cfg = {"TYPE": db_type}  # type: Dict[str, Any]
+        for k in ("TIMEOUT", "READONLY", "DRIVER", "UID", "PASSWORD",
+                  "HOST", "PORT", "SERVICE", "SIDTYPE", "TNSNAME",
+                  "DBNAME", "USER", "SCHEMA", "SSLMODE", "CHARSET",
+                  "FILE.IN.DB"):
+            v = dictJob.get(k, "")
+            if isinstance(v, str):
+                v = v.strip()
+            if v != "":
+                cfg[k] = v
+        if "TIMEOUT" not in cfg:
+            cfg["TIMEOUT"] = "30"
+        if db_type in ("SQLITE", "ACCESS"):
+            if not str(cfg.get("FILE.IN.DB", "")).strip():
+                return (f"FILE.IN.DB mancante per {db_type} (deve esistere)",
+                        "", {})
+        if db_type == "ORACLE":
+            if not (str(cfg.get("TNSNAME", "")).strip() or
+                    (str(cfg.get("HOST", "")).strip() and
+                     str(cfg.get("SERVICE", "")).strip())):
+                return ("HOST+SERVICE o TNSNAME obbligatori per ORACLE",
+                        "", {})
+            if not str(cfg.get("USER", "")).strip():
+                return ("USER mancante per ORACLE", "", {})
+        if db_type in ("POSTGRES", "MARIADB"):
+            if not str(cfg.get("DBNAME", "")).strip():
+                return (f"DBNAME mancante per {db_type}", "", {})
+            if not str(cfg.get("USER", "")).strip():
+                return (f"USER mancante per {db_type}", "", {})
+        if db_type == "SQLSERVER":
+            if not str(cfg.get("DBNAME", "")).strip():
+                return ("DBNAME mancante per SQLSERVER", "", {})
+        return ("", db_id, cfg)
+    except Exception as e:
+        return (f"{sProc}: Errore {e}", "", {})
+
 def cmd_db_open(dictJob: Dict[str, str]) -> str:
-    """DB.OPEN: DB.ID=<id>."""
+    """DB.OPEN: DB.ID + TYPE + parametri per TYPE (vedi prompt_ntj_fact_db.md).
+
+    Registra il DB in dictDb con flag STATUS="OPEN" (piu' DB aperti insieme).
+    """
     global _db_used, dictDb
     sProc = "cmd_db_open"
     print("Sto eseguendo " + sProc)
     sResult = ""
     try:
-        db_id = str(dictJob.get("DB.ID", "")).strip().upper()
-        sResult, cfg = _db_cfg(db_id, False)
+        sResult, db_id, cfg = _read_db_params(dictJob)
         if sResult:
             return _error_proc(sResult, sProc)
+        if db_id in dictDb and dictDb[db_id].get("STATUS") == "OPEN":
+            return _error_proc(f"DB <{db_id}> gia' aperto", sProc)
         db_type = cfg.get("TYPE", "")
-        if not db_type:
-            return _error_proc(f"TYPE mancante per DB <{db_id}>", sProc)
         sResult = _check_driver(db_type)
         if sResult:
             return _error_proc(sResult, sProc)
-        if cfg.get("HANDLE") is not None:
-            return _error_proc(f"DB <{db_id}> gia' aperto", sProc)
         readonly = str(cfg.get("READONLY", "FALSE")).upper() == "TRUE"
         if db_type == "SQLITE" and readonly:
             import sqlite3
-            path = cfg.get("PATH", "")
             conn = sqlite3.connect(
-                f"file:{path}?mode=ro", uri=True,
+                f"file:{cfg['FILE.IN.DB']}?mode=ro", uri=True,
                 timeout=int(cfg.get("TIMEOUT", "30")))
         else:
             conn = _db_connect(db_id, cfg)
         cfg["HANDLE"] = conn
-        cfg["OPEN"] = True
+        cfg["STATUS"] = "OPEN"
+        dictDb[db_id] = cfg
         _db_used = True
         _log_info(f"DB <{db_id}> aperto ({db_type})")
         sResult = _do_return(db_id)
@@ -434,63 +501,116 @@ def cmd_db_open(dictJob: Dict[str, str]) -> str:
 
 
 def cmd_db_create(dictJob: Dict[str, str]) -> str:
-    """DB.CREATE: DB.ID=<id>."""
+    """DB.CREATE: DB.ID + TYPE + parametri per TYPE (come DB.OPEN).
+
+    Crea il contenitore se manca e registra il DB chiuso in dictDb.
+    """
     global _db_used
     sProc = "cmd_db_create"
     print("Sto eseguendo " + sProc)
     sResult = ""
     try:
-        db_id = str(dictJob.get("DB.ID", "")).strip().upper()
-        sResult, cfg = _db_cfg(db_id, False)
+        sResult, db_id, cfg = _read_db_params(dictJob)
         if sResult:
             return _error_proc(sResult, sProc)
         db_type = cfg.get("TYPE", "")
         sResult = _check_driver(db_type)
         if sResult:
             return _error_proc(sResult, sProc)
-        # Implementazione per TYPE
+        # Implementazione per TYPE (FILE.IN.DB verificato da Start in CWD)
         if db_type == "SQLITE":
             import sqlite3
-            path = cfg.get("PATH", "")
-            if not path:
-                raise ValueError("PATH mancante per SQLITE")
+            path = cfg.get("FILE.IN.DB", "")
             parent = os.path.dirname(path)
             if parent and not os.path.isdir(parent):
                 os.makedirs(parent, exist_ok=True)
-            # Creazione file: apro e chiudo
+            # Creazione file: apro e chiudo (idempotente se esiste)
+            bExisted = os.path.isfile(path)
             conn = sqlite3.connect(path, timeout=int(cfg.get("TIMEOUT", "30")))
             conn.close()
-            _log_info(f"DB <{db_id}> creato (file {path})")
+            if bExisted:
+                _log_info(f"DB <{db_id}> esiste gia' (file {path})")
+            else:
+                _log_info(f"DB <{db_id}> creato (file {path})")
         elif db_type == "ACCESS":
-            # Richiede ADOX/COM (solo Windows + Access Engine)
-            try:
-                import win32com.client  # noqa: F401
-            except ImportError:
-                return _error_proc(
-                    "ACCESS CREATE richiede pywin32 (pip install pywin32)",
-                    sProc)
-            cat = win32com.client.Dispatch("ADOX.Catalog")
-            conn_str = (
-                f"Provider=Microsoft.ACE.OLEDB.12.0;"
-                f"Data Source={cfg.get('PATH', '')};")
-            cat.Create(conn_str)
-            _log_info(f"DB <{db_id}> creato (ACCESS)")
-        elif db_type in ("ORACLE", "POSTGRES", "MARIADB"):
+            # Richiede ADOX/COM (solo Windows + Access Engine).
+            # Esiste gia' = INFO idempotente (ADOX.Create fallirebbe).
+            acc_path = cfg.get("FILE.IN.DB", "")
+            if acc_path and os.path.isfile(acc_path):
+                _log_info(f"DB <{db_id}> esiste gia' (ACCESS)")
+            else:
+                try:
+                    import win32com.client  # noqa: F401
+                except ImportError:
+                    return _error_proc(
+                        "ACCESS CREATE richiede pywin32 (pip install pywin32)",
+                        sProc)
+                cat = win32com.client.Dispatch("ADOX.Catalog")
+                conn_str = (
+                    "Provider=Microsoft.ACE.OLEDB.12.0;"
+                    f"Data Source={acc_path};")
+                cat.Create(conn_str)
+                _log_info(f"DB <{db_id}> creato (ACCESS)")
+        elif db_type in ("ORACLE", "POSTGRES", "MARIADB", "SQLSERVER"):
             # Richiede utenza con privilegio CREATEDB / DBA
             # Connessione amministrativa temporanea
             tmp_cfg = cfg.copy()
             tmp_cfg["DBNAME"] = ""  # connessione al server
             conn = _db_connect(db_id, tmp_cfg)
-            cur = conn.cursor()
+            try:
+                if getattr(conn, "autocommit", None) is False:
+                    conn.autocommit = True  # CREATE DATABASE fuori txn
+            except Exception:
+                pass
             dbname = cfg.get("DBNAME", f"DB_{db_id}")
-            q = f"CREATE DATABASE IF NOT EXISTS {_quote_ident(db_type, dbname)}"
-            cur.execute(q)
-            conn.commit()
-            cur.close()
-            conn.close()
-            _log_info(f"DB <{db_id}> creato ({db_type}, DB={dbname})")
+            cur = conn.cursor()
+            try:
+                if db_type == "POSTGRES":
+                    cur.execute(
+                        "SELECT 1 FROM pg_database WHERE datname = %s",
+                        (dbname,))
+                    if cur.fetchone() is not None:
+                        _log_info(f"DB <{db_id}> esiste gia' (POSTGRES)")
+                    else:
+                        cur.execute(
+                            f"CREATE DATABASE {_quote_ident(db_type, dbname)}")
+                        conn.commit()
+                        _log_info(
+                            f"DB <{db_id}> creato ({db_type}, DB={dbname})")
+                elif db_type == "SQLSERVER":
+                    cur.execute(
+                        "SELECT 1 FROM sys.databases WHERE name = ?",
+                        (dbname,))
+                    if cur.fetchone() is not None:
+                        _log_info(f"DB <{db_id}> esiste gia' (SQLSERVER)")
+                    else:
+                        cur.execute(
+                            "CREATE DATABASE "
+                            + _quote_ident(db_type, dbname))
+                        conn.commit()
+                        _log_info(
+                            f"DB <{db_id}> creato ({db_type}, DB={dbname})")
+                elif db_type == "MARIADB":
+                    cur.execute(
+                        "CREATE DATABASE IF NOT EXISTS "
+                        f"{_quote_ident(db_type, dbname)}")
+                    conn.commit()
+                    _log_info(
+                        f"DB <{db_id}> creato ({db_type}, DB={dbname})")
+                else:  # ORACLE: creazione service/utente, policy DBA
+                    cur.execute(
+                        f"CREATE DATABASE {_quote_ident(db_type, dbname)}")
+                    conn.commit()
+                    _log_info(
+                        f"DB <{db_id}> creato ({db_type}, DB={dbname})")
+            finally:
+                cur.close()
+                conn.close()
         else:
             return _error_proc(f"TYPE non supportato: {db_type}", sProc)
+        cfg["HANDLE"] = None
+        cfg["STATUS"] = "CLOSE"
+        dictDb[db_id] = cfg
         _db_used = True
         sResult = _do_return(db_id)
     except Exception as e:
@@ -510,11 +630,12 @@ def cmd_db_close(dictJob: Dict[str, str]) -> str:
         if sResult:
             return _error_proc(sResult, sProc)
         conn = cfg.get("HANDLE")
-        if conn is None:
+        if cfg.get("STATUS") != "OPEN":
             return _error_proc(f"DB <{db_id}> non aperto", sProc)
-        conn.close()
+        if conn is not None:
+            conn.close()
         cfg["HANDLE"] = None
-        cfg["OPEN"] = False
+        cfg["STATUS"] = "CLOSE"
         _db_used = True
         _log_info(f"DB <{db_id}> chiuso")
         sResult = _do_return(db_id)
@@ -666,8 +787,8 @@ def _table_columns_db(conn: Any, db_type: str,
         if not names:
             return (f"tabella {table}: nessuna colonna rilevata", [])
         return ("", names)
-    except Exception as e:
-        return (str(e), [])
+    except Exception:
+        return (f"tabella {table} non esistente o illeggibile", [])
 
 
 def cmd_tab_create_json(dictJob: Dict[str, str]) -> str:
@@ -965,6 +1086,116 @@ def cmd_db_export(dictJob: Dict[str, str]) -> str:
     return _error_proc(sResult, sProc)
 
 
+def _compact_sqlite(sPath: str, timeout: int) -> None:
+    """VACUUM in place (errore se transazione aperta o file danneggiato)."""
+    import sqlite3
+    conn = sqlite3.connect(sPath, timeout=timeout)
+    try:
+        conn.execute("VACUUM")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _compact_access(sPath: str) -> None:
+    """Compact and Repair via DAO (ACE) con fallback JRO (solo .mdb)."""
+    sLow = sPath.lower()
+    try:
+        import win32com.client
+    except ImportError:
+        raise RuntimeError(
+            "ACCESS COMPACT richiede pywin32 (pip install pywin32)")
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
+    sTmp = sPath + ".compact_tmp"
+    if os.path.isfile(sTmp):
+        os.remove(sTmp)
+    try:
+        try:
+            engine = win32com.client.Dispatch("DAO.DBEngine.120")
+        except Exception:
+            if sLow.endswith(".accdb"):
+                raise RuntimeError(
+                    "ACCESS COMPACT .accdb richiede Access Database "
+                    "Engine (DAO.DBEngine.120 assente)")
+            engine = win32com.client.Dispatch("DAO.DBEngine.36")
+        engine.CompactDatabase(sPath, sTmp)
+    except Exception:
+        if os.path.isfile(sTmp):
+            os.remove(sTmp)
+        raise
+    os.replace(sTmp, sPath)
+
+
+def cmd_db_compact(dictJob: Dict[str, str]) -> str:
+    """DB.COMPACT: FILE.IN.DB=<file> (.db/.sqlite/.mdb/.accdb).
+
+    Prima crea backup <file>.old (sovrascrive), poi compatta.
+    Il file non deve essere aperto in dictDb (prima DB.CLOSE).
+    Solo file-DB (SQLITE/ACCESS); server via SQL.EXEC (vedi prompt).
+    Ritorna byte recuperati in RETURN.VALUE.
+    """
+    global _db_used, dictDb
+    sProc = "cmd_db_compact"
+    print("Sto eseguendo " + sProc)
+    sResult = ""
+    try:
+        sPath = str(dictJob.get("FILE.IN.DB", "")).strip()
+        if not sPath:
+            return _error_proc("FILE.IN.DB non precisato", sProc)
+        if not os.path.isfile(sPath):
+            return _error_proc(f"FILE.IN.DB non esistente: {sPath}", sProc)
+        sLow = sPath.lower()
+        if sLow.endswith((".db", ".sqlite", ".sqlite3", ".db3")):
+            sKind = "SQLITE"
+        elif sLow.endswith(".mdb") or sLow.endswith(".accdb"):
+            sKind = "ACCESS"
+        else:
+            return _error_proc(
+                f"estensione non compattabile: {sPath} "
+                "(solo .db/.sqlite/.mdb/.accdb)", sProc)
+        sAbs = os.path.abspath(os.path.normcase(sPath))
+        for sId, cfg in dictDb.items():
+            if cfg.get("STATUS") != "OPEN":
+                continue
+            sDbPath = str(cfg.get("FILE.IN.DB", ""))
+            if sDbPath and os.path.abspath(
+                    os.path.normcase(sDbPath)) == sAbs:
+                return _error_proc(
+                    f"file aperto come DB <{sId}>: prima DB.CLOSE", sProc)
+        nBefore = os.path.getsize(sPath)
+        shutil.copyfile(sPath, sPath + ".old")
+        sLastErr = ""
+        for nTry in (1, 2, 3):
+            try:
+                if sKind == "SQLITE":
+                    _compact_sqlite(sPath, 30)
+                else:
+                    _compact_access(sPath)
+                sLastErr = ""
+                break
+            except Exception as e:
+                sLastErr = str(e)
+                if nTry < 3:
+                    _log_info(f"Compact tentativo {nTry} fallito, "
+                              f"riprovo ({sLastErr[:100]})")
+                    time.sleep(2)
+        if sLastErr:
+            return _error_proc(sLastErr, sProc)
+        nAfter = os.path.getsize(sPath)
+        nSaved = nBefore - nAfter
+        _db_used = True
+        _log_info(f"Compattato {sPath} ({sKind}): "
+                  f"{nBefore} -> {nAfter} byte")
+        sResult = _do_return(str(nSaved))
+    except Exception as e:
+        sResult = str(e)
+    return _error_proc(sResult, sProc)
+
+
 # =============================================================================
 # CLEANUP E DISPATCHER
 # =============================================================================
@@ -980,11 +1211,11 @@ def db_cleanup_all() -> str:
             if conn is not None:
                 try:
                     conn.close()
-                    cfg["HANDLE"] = None
-                    cfg["OPEN"] = False
-                    sInfo.append(f"chiuso {db_id}")
                 except Exception:
                     pass
+                cfg["HANDLE"] = None
+                cfg["STATUS"] = "CLOSE"
+                sInfo.append(f"chiuso {db_id}")
         if sInfo:
             _log_info("DB cleanup: " + ", ".join(sInfo))
         return ""
@@ -1012,6 +1243,8 @@ def cbCommands_db(dictJob: Dict[str, str]) -> str:
         return cmd_db_import(dictJob)
     elif sCommand == "DB.EXPORT":
         return cmd_db_export(dictJob)
+    elif sCommand == "DB.COMPACT":
+        return cmd_db_compact(dictJob)
     else:
         return f"cbCommands_db: Errore COMMAND DB sconosciuto: {sCommand}"
 
