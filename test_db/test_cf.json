@@ -1,0 +1,8 @@
+{
+  "table": "test_cf",
+  "columns": [
+    {"name": "ID", "type": "INTEGER", "pk": true, "auto": true, "null": false},
+    {"name": "CF", "type": "TEXT", "size": 16, "null": false},
+    {"name": "NOMINATIVO", "type": "TEXT", "size": 60}
+  ]
+}

@@ -22,6 +22,12 @@ import time
 import shutil
 from typing import Dict, List, Any, Optional, Tuple
 
+
+def Timestamp() -> str:
+    """Timestamp corrente nel formato ntJobsApp: YYYYMMDD:HHMMSS."""
+    import datetime
+    return datetime.datetime.now().strftime("%Y%m%d:%H%M%S")
+
 # Flag: True se almeno un comando DB e' stato eseguito in questo run
 _db_used = False
 
@@ -644,8 +650,12 @@ def cmd_db_close(dictJob: Dict[str, str]) -> str:
     return _error_proc(sResult, sProc)
 
 
-def cmd_sql_exec(dictJob: Dict[str, str]) -> str:
-    """SQL.EXEC: DB.ID + SQL xor FILE.IN.SQL, opz. FILE.OUT.XLS."""
+def cmd_sql_exec(dictJob) -> str:
+    """SQL.EXEC: DB.ID + SQL xor FILE.IN.SQL.
+
+    SELECT: output opzionale via FILE.OUT.XLS (.xls/.xlsx) o
+    FILE.OUT.EXPORT (.csv/.xls/.xlsx, per estensione), in xor.
+    """
     global _db_used, dictDb
     sProc = "cmd_sql_exec"
     print("Sto eseguendo " + sProc)
@@ -670,38 +680,64 @@ def cmd_sql_exec(dictJob: Dict[str, str]) -> str:
                 sql = f.read().strip()
         if not sql.upper().split()[0:1]:
             return _error_proc("SQL vuoto", sProc)
+        file_xls = str(dictJob.get("FILE.OUT.XLS", "")).strip()
+        file_exp = str(dictJob.get("FILE.OUT.EXPORT", "")).strip()
+        if not sql.upper().startswith("SELECT") and (file_xls or file_exp):
+            return _error_proc(
+                "FILE.OUT.XLS/EXPORT previsti solo per SELECT", sProc)
         db_type = cfg.get("TYPE", "")
         conn = cfg["HANDLE"]
         cur = conn.cursor()
         cur.execute(sql)
         if sql.upper().startswith("SELECT"):
             rows = cur.fetchall()
-            file_out = str(dictJob.get("FILE.OUT.XLS", "")).strip()
-            if file_out:
-                # Scrittura Excel (riuso logica xls_merge in ntj_fact)
+            cols = [d[0] for d in (cur.description or [])]
+            if file_xls and file_exp:
+                return _error_proc(
+                    "Specificare FILE.OUT.XLS xor FILE.OUT.EXPORT", sProc)
+            file_out = ""
+            sReturnKey = ""
+            if file_xls:
+                file_out, sReturnKey = file_xls, "XLS"
+                if not file_out.lower().endswith((".xls", ".xlsx")):
+                    return _error_proc(
+                        "Estensione FILE.OUT.XLS non valida: "
+                        "solo .xls/.xlsx", sProc)
+            elif file_exp:
+                file_out, sReturnKey = file_exp, "EXPORT"
+                if not file_out.lower().endswith((".csv", ".xls", ".xlsx")):
+                    return _error_proc(
+                        "Estensione FILE.OUT.EXPORT non valida: "
+                        "solo .csv/.xls/.xlsx", sProc)
+            if file_out and file_out.lower().endswith(".csv"):
+                # CSV stile DB.EXPORT: ;, header, utf-8-sig, NULL->vuoto
+                with open(file_out, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.writer(f, delimiter=";")
+                    writer.writerow(cols)
+                    for row in rows:
+                        writer.writerow([_export_value(v, False)
+                                         for v in row])
+            elif file_out and file_out.lower().endswith(".xlsx"):
                 import pandas as pd
-                cols = [d[0] for d in cur.description]
                 df = pd.DataFrame(rows, columns=cols)
-                s_ext = file_out.lower()
-                if s_ext.endswith(".xlsx"):
-                    df.to_excel(file_out, index=False)
-                elif s_ext.endswith(".xls"):
-                    import xlwt
-                    wb = xlwt.Workbook()
-                    ws = wb.add_sheet("Sheet1")
-                    for c, h in enumerate(cols):
-                        ws.write(0, c, h)
-                    for r, row in enumerate(rows, start=1):
-                        for c, v in enumerate(row):
-                            ws.write(r, c, v if v is not None else "")
-                    wb.save(file_out)
-                else:
-                    raise ValueError("Estensione output non .xls/.xlsx")
+                df.to_excel(file_out, index=False)
+            elif file_out:
+                import xlwt
+                wb = xlwt.Workbook()
+                ws = wb.add_sheet("Sheet1")
+                for c, h in enumerate(cols):
+                    ws.write(0, c, h)
+                for r, row in enumerate(rows, start=1):
+                    for c, v in enumerate(row):
+                        ws.write(r, c, v if v is not None else "")
+                wb.save(file_out)
+            if file_out:
                 _log_info(f"Scritto {file_out} ({len(rows)} righe)")
             cur.close()
             _db_used = True
-            sResult = _do_return(str(len(rows)),
-                                 {"XLS": file_out} if file_out else None)
+            sResult = _do_return(
+                str(len(rows)),
+                {sReturnKey: file_out} if file_out else None)
         else:
             conn.commit()
             rowcount = cur.rowcount if cur.rowcount >= 0 else 0
@@ -1032,7 +1068,11 @@ def _export_value(v: Any, for_json: bool) -> Any:
 
 
 def cmd_db_export(dictJob: Dict[str, str]) -> str:
-    """DB.EXPORT: DB.ID + OUT.QUERY + FILE.OUT.QUERY + OUT.TYPE (CSV|JSON)."""
+    """DB.EXPORT: DB.ID + OUT.QUERY + FILE.OUT.QUERY.
+
+    Formato dal'estensione del file output: .csv/.json/.xlsx
+    (altri tipi = errore).
+    """
     global _db_used, dictDb
     sProc = "cmd_db_export"
     print("Sto eseguendo " + sProc)
@@ -1044,21 +1084,24 @@ def cmd_db_export(dictJob: Dict[str, str]) -> str:
             return _error_proc(sResult, sProc)
         sql = str(dictJob.get("OUT.QUERY", "")).strip()
         file_out = str(dictJob.get("FILE.OUT.QUERY", "")).strip()
-        out_type = str(dictJob.get("OUT.TYPE", "")).strip().upper()
         if not sql:
             return _error_proc("OUT.QUERY non precisata", sProc)
         if sql.upper().split()[0:1] != ["SELECT"]:
             return _error_proc("OUT.QUERY deve essere una SELECT", sProc)
-        if out_type not in ("CSV", "JSON"):
-            return _error_proc(
-                f"OUT.TYPE non valido: {out_type} (CSV|JSON)", sProc)
         if not file_out:
             return _error_proc("FILE.OUT.QUERY non precisato", sProc)
-        s_ext = ".csv" if out_type == "CSV" else ".json"
-        if not file_out.lower().endswith(s_ext):
+        f_low = file_out.lower()
+        if f_low.endswith(".csv"):
+            out_type = "CSV"
+        elif f_low.endswith(".json"):
+            out_type = "JSON"
+        elif f_low.endswith(".xlsx"):
+            out_type = "XLSX"
+        else:
+            s_ext = "." + file_out.rsplit(".", 1)[-1] if "." in \
+                os.path.basename(file_out) else file_out
             return _error_proc(
-                f"FILE.OUT.QUERY deve finire con {s_ext} "
-                f"(OUT.TYPE={out_type})", sProc)
+                f"esportazione {s_ext} non supportata", sProc)
         conn = cfg["HANDLE"]
         cur = conn.cursor()
         cur.execute(sql)
@@ -1071,13 +1114,17 @@ def cmd_db_export(dictJob: Dict[str, str]) -> str:
                 writer.writerow(cols)
                 for row in rows:
                     writer.writerow([_export_value(v, False) for v in row])
-        else:
+        elif out_type == "JSON":
             data = []
             for row in rows:
                 data.append({c: _export_value(v, True)
                              for c, v in zip(cols, row)})
             with open(file_out, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+        else:
+            import pandas as pd
+            df = pd.DataFrame(rows, columns=cols)
+            df.to_excel(file_out, index=False)
         _db_used = True
         _log_info(f"Export {out_type} {file_out} ({len(rows)} righe)")
         sResult = _do_return(str(len(rows)), {"QUERY": file_out})
@@ -1128,6 +1175,815 @@ def _compact_access(sPath: str) -> None:
             os.remove(sTmp)
         raise
     os.replace(sTmp, sPath)
+
+
+def _info_dbms_version(conn: Any, db_type: str) -> str:
+    """Versione DBMS per TYPE (best effort, 'n/d' se non disp.)."""
+    try:
+        cur = conn.cursor()
+        if db_type == "SQLITE":
+            import sqlite3
+            cur.close()
+            return f"SQLite {sqlite3.sqlite_version}"
+        elif db_type == "SQLSERVER":
+            cur.execute("SELECT @@VERSION")
+            v = str(cur.fetchone()[0]).replace("\n", " ")
+        elif db_type == "POSTGRES":
+            cur.execute("SELECT version()")
+            v = str(cur.fetchone()[0]).replace("\n", " ")
+        elif db_type == "MARIADB":
+            cur.execute("SELECT @@version")
+            v = str(cur.fetchone()[0]).replace("\n", " ")
+        elif db_type == "ORACLE":
+            cur.execute(
+                "SELECT banner FROM v$version WHERE ROWNUM=1")
+            v = str(cur.fetchone()[0]).strip()
+        else:  # ACCESS: versione driver via ODBC
+            import pyodbc
+            v = (f"driver {conn.getinfo(pyodbc.SQL_DRIVER_NAME)} "
+                 f"{conn.getinfo(pyodbc.SQL_DRIVER_VER)}")
+        cur.close()
+        return v
+    except Exception:
+        return "n/d"
+
+
+def _info_tables(conn: Any, db_type: str
+                 ) -> Tuple[str, str, List[str]]:
+    """Trova tabella count/colonne di count/list (errore, count, names)."""
+    try:
+        cur = conn.cursor()
+
+        def close() -> None:
+            cur.close()
+    except Exception as e:
+        return (str(e), "0", [])
+
+    sCount = ""
+    sNames = ""
+    names: List[str] = []
+    try:
+        if db_type == "SQLITE":
+            cur.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            names = [str(r[0]) for r in cur.fetchall()]
+            sCount = "SELECT COUNT(*) FROM sqlite_master"
+        elif db_type == "ORACLE":
+            cur.execute(
+                "SELECT table_name FROM user_tables")
+            names = [str(r[0]) for r in cur.fetchall()]
+            sCount = "SELECT COUNT(*) FROM user_tables"
+        elif db_type in ("POSTGRES", "MARIADB", "SQLSERVER"):
+            cur.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema != 'INFORMATION_SCHEMA'")
+            names = [str(r[0]) for r in cur.fetchall()]
+            sCount = (
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema != 'INFORMATION_SCHEMA'")
+        elif db_type == "ACCESS":
+            # MSysObjects di solito negata, best effort
+            cur.execute(
+                "SELECT Name FROM MSysObjects "
+                "WHERE Type=1 AND Flags=0")
+            names = [str(r[0]) for r in cur.fetchall()]
+            sCount = (f"SELECT COUNT(*) FROM MSysObjects "
+                      f"WHERE Type=1 AND Flags=0")
+        else:
+            return ("TYPE non gestito per elenco tabelle", "0", [])
+        cur.close()
+        if sCount:
+            cur = conn.cursor()
+            try:
+                cur.execute(sCount)
+                sNames = str(cur.fetchone()[0])
+            finally:
+                close()
+    except Exception as e:
+        return (str(e), "0", names)
+    return ("", sNames, names)
+
+
+def _link_source_connect(cfg: Dict[str, Any]) -> str:
+    """Costruisce la Connect string per il link DAO dal TYPE sorgente.
+
+    ACCESS sorgente: Jet-to-Jet (nessun driver extra). Altri TYPE:
+    ODBC (la disponibilita' del driver dipende dall'ambiente).
+    """
+    t = str(cfg.get("TYPE", ""))
+    if t == "ACCESS":
+        return (";DATABASE="
+                + os.path.abspath(str(cfg.get("FILE.IN.DB", ""))))
+    user = str(cfg.get("USER", ""))
+    pwd = str(cfg.get("PASSWORD", ""))
+    host = str(cfg.get("HOST", "localhost"))
+    port = str(cfg.get("PORT", ""))
+    dbname = str(cfg.get("DBNAME", ""))
+    if t == "SQLSERVER":
+        driver = str(cfg.get("DRIVER", "ODBC Driver 17 for SQL Server"))
+        if not port:
+            port = "1433"
+        cs = (f"ODBC;DRIVER={{{driver}}};SERVER={host},{port};"
+              f"DATABASE={dbname};")
+        if user:
+            cs += f"UID={user};PWD={pwd};"
+        else:
+            cs += "Trusted_Connection=yes;"
+        return cs
+    if t == "SQLITE":
+        driver = str(cfg.get("DRIVER", "SQLite3 ODBC Driver"))
+        return ("ODBC;DRIVER={" + driver + "};DATABASE="
+                + os.path.abspath(str(cfg.get("FILE.IN.DB", ""))) + ";")
+    if t == "ORACLE":
+        driver = str(cfg.get("DRIVER", ""))
+        if not driver:
+            raise ValueError(
+                "driver ODBC per ORACLE non precisato (DRIVER)")
+        service = str(cfg.get("SERVICE", ""))
+        tns = str(cfg.get("TNSNAME", ""))
+        target = tns or f"{host}:{port or '1521'}/{service}"
+        return (f"ODBC;DRIVER={{{driver}}};DBQ={target};"
+                f"UID={user};PWD={pwd};")
+    if t in ("POSTGRES", "MARIADB"):
+        driver = str(cfg.get("DRIVER", ""))
+        if not driver:
+            driver = ("PostgreSQL Unicode" if t == "POSTGRES"
+                      else "MySQL ODBC 8.0 ANSI Driver")
+        if t == "POSTGRES":
+            if not port:
+                port = "5432"
+            cs = (f"ODBC;DRIVER={{{driver}}};SERVER={host};PORT={port};"
+                  f"DATABASE={dbname};")
+        else:
+            if not port:
+                port = "3306"
+            cs = (f"ODBC;DRIVER={{{driver}}};SERVER={host};PORT={port};"
+                  f"DATABASE={dbname};")
+        cs += f"UID={user};PWD={pwd};"
+        return cs
+    raise ValueError(f"TYPE sorgente non gestito per DB.LINK: {t}")
+
+
+def _acc_tab_exists(t_path: str, name: str) -> bool:
+    """Probe esistenza tabella in file ACCESS via connessione FRESCA.
+
+    L'handle ODBC gia' aperto sullo stesso file non vede le modifiche
+    di schema fatte da altri handle (cache di catalogo ODBC): per
+    verifiche su link DAO serve sempre una nuova connessione.
+    """
+    try:
+        import pyodbc
+        pyodbc.pooling = False
+        cs = ("DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};"
+              f"DBQ={os.path.abspath(t_path)};")
+        c = pyodbc.connect(cs, autocommit=True)
+        try:
+            return _tab_exists(c, "ACCESS", name)
+        finally:
+            c.close()
+    except Exception:
+        return False
+
+
+def cmd_db_link(dictJob: Dict[str, str]) -> str:
+    """DB.LINK: collega una tabella esterna in ACCESS come allegata.
+
+    DB.ID = target ACCESS aperto; DBL.ID = sorgente aperta (altro ID);
+    DBL.TABLE = tabella sorgente; DBL.NAME = nome della tabella
+    allegata da creare nel target. Creazione via DAO CreateTableDef.
+    """
+    global _db_used, dictDb
+    sProc = "cmd_db_link"
+    print("Sto eseguendo " + sProc)
+    sResult = ""
+    try:
+        db_id = str(dictJob.get("DB.ID", "")).strip().upper()
+        sResult, target = _db_cfg(db_id, True)
+        if sResult:
+            return _error_proc(sResult, sProc)
+        if str(target.get("TYPE", "")) != "ACCESS":
+            return _error_proc(
+                f"DB.ID <{db_id}> deve essere di tipo ACCESS "
+                f"({target.get('TYPE')})", sProc)
+        dbl_id = str(dictJob.get("DBL.ID", "")).strip().upper()
+        if not dbl_id:
+            return _error_proc("DBL.ID non precisato", sProc)
+        if dbl_id == db_id:
+            return _error_proc("DBL.ID = DB.ID: self-link non ammesso",
+                               sProc)
+        sResult, source = _db_cfg(dbl_id, True)
+        if sResult:
+            return _error_proc(sResult, sProc)
+        dbl_table = str(dictJob.get("DBL.TABLE", "")).strip()
+        if not dbl_table:
+            return _error_proc("DBL.TABLE non precisata", sProc)
+        dbl_name = str(dictJob.get("DBL.NAME", "")).strip()
+        if not dbl_name:
+            return _error_proc("DBL.NAME non precisato", sProc)
+        if not re.match(r"^[A-Za-z0-9_]+$", dbl_name):
+            return _error_proc(f"DBL.NAME non valido: {dbl_name}", sProc)
+        src_type = str(source.get("TYPE", ""))
+        s_conn = source.get("HANDLE")
+        if not _tab_exists(s_conn, src_type, dbl_table):
+            return _error_proc(
+                f"tabella <{dbl_table}> non trovata nel sorgente "
+                f"<{dbl_id}> ({src_type})", sProc)
+        t_path = os.path.abspath(str(target.get("FILE.IN.DB", "")))
+        if _acc_tab_exists(t_path, dbl_name):
+            return _error_proc(
+                f"tabella <{dbl_name}> gia' esistente nel target "
+                f"<{db_id}>", sProc)
+        try:
+            import win32com.client
+        except ImportError:
+            return _error_proc(
+                "DB.LINK richiede pywin32 (pip install pywin32)", sProc)
+        connect_src = _link_source_connect(source)
+        engine = win32com.client.Dispatch("DAO.DBEngine.120")
+        dao_db = engine.OpenDatabase(t_path, False, False, "")
+        try:
+            td = dao_db.CreateTableDef(dbl_name)
+            td.Connect = connect_src
+            td.SourceTableName = dbl_table
+            dao_db.TableDefs.Append(td)
+        finally:
+            dao_db.Close()
+            del dao_db
+        # Verifica post-link su connessione FRESCA al file (la stessa
+        # regola del pre-check: l'handle aperto non vede lo schema nuovo)
+        if not _acc_tab_exists(t_path, dbl_name):
+            return _error_proc(
+                f"link creato ma tabella <{dbl_name}> non visibile "
+                "(riaprire DB.ID per vederla)", sProc)
+        _db_used = True
+        _log_info(f"DB.LINK {dbl_name} <- {dbl_id}.{dbl_table} "
+                  f"({src_type})")
+        sResult = _do_return(dbl_name)
+    except Exception as e:
+        sResult = str(e)
+    return _error_proc(sResult, sProc)
+
+
+def cmd_db_info(dictJob: Dict[str, str]) -> str:
+    """DB.INFO: FILE.OUT.INFO (.txt) con info DB opz. (DB.ID) + driver ODBC.
+
+    DB.ID opzionale (se presente deve essere aperto): sezione DB con
+    versione DBMS, parametri (PASSWORD nascosta), tabelle con COUNT e
+    colonne. Senza DB.ID: solo ambiente + driver ODBC installati.
+    Ogni sezione e' resiliente: n/d su errore.
+    """
+    global _db_used, dictDb
+    sProc = "cmd_db_info"
+    print("Sto eseguendo " + sProc)
+    sResult = ""
+    try:
+        file_out = str(dictJob.get("FILE.OUT.INFO", "")).strip()
+        if not file_out:
+            return _error_proc("FILE.OUT.INFO non precisato", sProc)
+        if not file_out.lower().endswith(".txt"):
+            return _error_proc("FILE.OUT.INFO deve finire con .txt", sProc)
+        db_id = str(dictJob.get("DB.ID", "")).strip().upper()
+        db_type = ""
+        conn: Any = None
+        cfg: Optional[Dict[str, Any]] = None
+        if db_id:
+            sResult, cfg = _db_cfg(db_id, True)
+            if sResult:
+                return _error_proc(sResult, sProc)
+            db_type = str(cfg.get("TYPE", ""))
+            conn = cfg.get("HANDLE")
+        lines: List[str] = []
+        import datetime
+        import platform
+        lines.append("DB.INFO - " + Timestamp())
+        lines.append("")
+        lines.append("AMBIENTE")
+        lines.append("  PIATTFORMA: "
+                     f"{sys.platform} / {platform.system()} "
+                     f"({platform.machine()})")
+        lines.append(f"  PYTHON: {platform.python_version()} "
+                     f"({sys.executable})")
+        lines.append("")
+
+        try:
+            import pyodbc
+            lines.append("DRIVER ODBC INSTALLATI")
+            for drv in pyodbc.drivers():
+                lines.append(f"  {drv}")
+            lines.append("")
+        except ImportError:
+            lines.append("DRIVER ODBC INSTALLATI")
+            lines.append("  n/d (pyodbc non installato)")
+            lines.append("")
+
+        if conn is not None:
+            lines.append(f"DB <{db_id}> ({db_type})")
+            lines.append(f"  DBMS: {_info_dbms_version(conn, db_type)}")
+            for k in ("FILE.IN.DB", "DBNAME", "HOST", "PORT", "SERVICE",
+                      "TNSNAME", "USER", "SCHEMA", "CHARSET", "SSLMODE",
+                      "READONLY", "TIMEOUT"):
+                v = cfg.get(k, "")
+                if v != "":
+                    lines.append(f"  {k}: {v}")
+            sErr, sNames, names = _info_tables(conn, db_type)
+            lines.append(f"  TABELLE: {sNames}"
+                         + (f" (elenco n/d: {sErr[:80]})" if sErr else ""))
+            for name in names:
+                try:
+                    tcur = conn.cursor()
+                    tcur.execute(
+                        f"SELECT COUNT(*) FROM {_quote_ident(db_type, name)}")
+                    n = str(tcur.fetchone()[0])
+                    tcur.execute(
+                        f"SELECT * FROM {_quote_ident(db_type, name)} "
+                        "WHERE 1=0")
+                    cols = ", ".join(
+                        f"{d[0]}"
+                        + (f"({d[1]})" if isinstance(d[1], str) and d[1]
+                           else "")
+                        for d in (tcur.description or []))
+                    tcur.close()
+                    lines.append(f"    {name}: {n} righe, "
+                                 f"colonne: {cols}")
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    lines.append(
+                        f"    {name}: n/d ({str(e)[:80]})")
+            lines.append("")
+        with open(file_out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        _db_used = True
+        _log_info(f"DB.INFO -> {file_out} ({len(lines)} righe)")
+        sResult = _do_return(str(len(lines)), {"INFO": file_out})
+    except Exception as e:
+        sResult = str(e)
+    return _error_proc(sResult, sProc)
+
+
+def _list_q(cur: Any, sql: str) -> List[List[str]]:
+    """Esegue query catalogo e ritorna righe [[*], ...] (best effort)."""
+    cur.execute(sql)
+    return [[str(v) for v in row] for row in cur.fetchall()]
+
+
+def _list_tables(conn: Any, db_type: str) -> Tuple[str, List[List[str]]]:
+    """Nome tabelle per TYPE (senza tabelle di sistema)."""
+    try:
+        cur = conn.cursor()
+        if db_type == "SQLITE":
+            rows = _list_q(cur, "SELECT name FROM sqlite_master "
+                                "WHERE type='table' AND name "
+                                "NOT LIKE 'sqlite_%'")
+        elif db_type == "SQLSERVER":
+            rows = _list_q(cur, "SELECT table_name FROM "
+                                "information_schema.tables WHERE "
+                                "table_type='BASE TABLE'")
+        elif db_type == "ORACLE":
+            rows = _list_q(cur, "SELECT table_name FROM user_tables")
+        elif db_type == "POSTGRES":
+            rows = _list_q(cur, "SELECT table_name FROM "
+                                "information_schema.tables WHERE "
+                                "table_type='BASE TABLE' AND "
+                                "table_schema NOT IN ('pg_catalog',"
+                                "'information_schema')")
+        elif db_type == "MARIADB":
+            rows = _list_q(cur, "SELECT table_name FROM "
+                                "information_schema.tables WHERE "
+                                "table_type='BASE TABLE' AND "
+                                "table_schema=DATABASE()")
+        elif db_type == "ACCESS":
+            rows = []
+            for t in cur.tables(tableType="TABLE"):
+                rows.append([str(t.table_name)])
+        else:
+            cur.close()
+            return ("TYPE non gestito", [])
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+def _list_views(conn: Any, db_type: str) -> Tuple[str, List[List[str]]]:
+    """Viste per TYPE (ACCESS: n/a, le query salvate sono in QUERIES)."""
+    try:
+        if db_type == "ACCESS":
+            return ("", [])
+        cur = conn.cursor()
+        if db_type == "SQLITE":
+            rows = _list_q(cur, "SELECT name FROM sqlite_master "
+                                "WHERE type='view'")
+        elif db_type == "SQLSERVER":
+            rows = _list_q(cur, "SELECT table_name FROM "
+                                "information_schema.views")
+        elif db_type == "ORACLE":
+            rows = _list_q(cur, "SELECT view_name FROM user_views")
+        elif db_type == "POSTGRES":
+            rows = _list_q(cur, "SELECT table_name FROM "
+                                "information_schema.tables WHERE "
+                                "table_type='VIEW' AND table_schema "
+                                "NOT IN ('pg_catalog',"
+                                "'information_schema')")
+        elif db_type == "MARIADB":
+            rows = _list_q(cur, "SELECT table_name FROM "
+                                "information_schema.tables WHERE "
+                                "table_type='VIEW' AND "
+                                "table_schema=DATABASE()")
+        else:
+            cur.close()
+            return ("TYPE non gestito", [])
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+def _list_queries_access(conn: Any, cfg: Dict[str, Any]
+                         ) -> Tuple[str, List[List[str]]]:
+    """Query salvate ACCESS via ADOX (Views=SELECT, Procedures=action)."""
+    try:
+        import win32com.client
+    except ImportError:
+        return ("pywin32 non installato", [])
+    sProc = "_list_queries_access"
+    cat = None
+    try:
+        path = os.path.abspath(str(cfg.get("FILE.IN.DB", "")))
+        cat = win32com.client.Dispatch("ADOX.Catalog")
+        cat.ActiveConnection = (
+            "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + path + ";")
+        rows: List[List[str]] = []
+        for v in cat.Views:
+            rows.append(["VIEW-QUERY", str(v.Name)])
+        for p in cat.Procedures:
+            rows.append(["ACTION-QUERY", str(p.Name)])
+        return ("", rows)
+    except Exception as e:
+        return (str(e)[:120], [])
+    finally:
+        if cat is not None:
+            del cat
+        import gc
+        gc.collect()
+
+
+def _list_queries(conn: Any, db_type: str, cfg: Dict[str, Any]
+                  ) -> Tuple[str, List[List[str]]]:
+    """Query salvate (solo ACCESS via ADOX; altri TYPE n/a)."""
+    if db_type != "ACCESS":
+        return ("non previsto per " + db_type, [])
+    return _list_queries_access(conn, cfg)
+
+
+def _list_procs(conn: Any, db_type: str) -> Tuple[str, List[List[str]]]:
+    """Store procedures/functions (ACCESS: n/a, le query sono in QUERIES)."""
+    try:
+        if db_type in ("ACCESS", "SQLITE"):
+            return ("", [])
+        cur = conn.cursor()
+        if db_type == "SQLSERVER":
+            rows = _list_q(cur, "SELECT routine_name, routine_type FROM "
+                                "information_schema.routines")
+        elif db_type == "ORACLE":
+            rows = _list_q(cur, "SELECT object_name, object_type FROM "
+                                "user_objects WHERE object_type IN "
+                                "('PROCEDURE','FUNCTION','PACKAGE')")
+        elif db_type == "POSTGRES":
+            rows = _list_q(cur, "SELECT proname, CASE prokind WHEN 'p' "
+                                "THEN 'PROCEDURE' ELSE 'FUNCTION' END "
+                                "FROM pg_proc p JOIN pg_namespace n ON "
+                                "p.pronamespace=n.oid WHERE n.nspname "
+                                "NOT IN ('pg_catalog',"
+                                "'information_schema')")
+        elif db_type == "MARIADB":
+            rows = _list_q(cur, "SELECT routine_name, routine_type FROM "
+                                "information_schema.routines WHERE "
+                                "routine_schema=DATABASE()")
+        else:
+            cur.close()
+            return ("TYPE non gestito", [])
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+def _list_triggers(conn: Any,
+                   db_type: str) -> Tuple[str, List[List[str]]]:
+    """Trigger per TYPE (info = tabella di aggancio se disponibile)."""
+    try:
+        if db_type == "ACCESS":
+            return ("", [])
+        cur = conn.cursor()
+        if db_type == "SQLITE":
+            rows = _list_q(cur, "SELECT name FROM sqlite_master "
+                                "WHERE type='trigger'")
+        elif db_type == "SQLSERVER":
+            rows = _list_q(cur, "SELECT name FROM sys.triggers")
+        elif db_type == "ORACLE":
+            rows = _list_q(
+                cur, "SELECT trigger_name, table_name FROM user_triggers")
+        elif db_type == "POSTGRES":
+            rows = _list_q(cur, "SELECT c.relname, t.tgname FROM pg_trigger "
+                                "t JOIN pg_class c ON t.tgrelid=c.oid "
+                                "WHERE NOT t.tgisinternal")
+        elif db_type == "MARIADB":
+            rows = _list_q(cur, "SELECT trigger_name, event_object_table "
+                                "FROM information_schema.triggers WHERE "
+                                "trigger_schema=DATABASE()")
+        else:
+            cur.close()
+            return ("TYPE non gestito", [])
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+def _list_indexes(conn: Any,
+                  db_type: str) -> Tuple[str, List[List[str]]]:
+    """Indici per TYPE (info = tabella + unique se disponibile)."""
+    try:
+        cur = conn.cursor()
+        rows: List[List[str]] = []
+        if db_type == "SQLITE":
+            cur.execute("SELECT name FROM sqlite_master WHERE "
+                        "type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = [str(r[0]) for r in cur.fetchall()]
+            for t in tables:
+                cur.execute(f"PRAGMA index_list({_quote_ident(db_type, t)})")
+                for r in cur.fetchall():
+                    rows.append([str(r[1]), f"{t} unique={r[2]}"])
+        elif db_type in ("ACCESS", "SQLSERVER"):
+            for t in _list_tables(conn, db_type)[1]:
+                try:
+                    for r in cur.indexes(table=t[0]):
+                        rows.append([str(r[2]),
+                                     f"{t[0]} unique={bool(r[4])}"])
+                except Exception:
+                    pass
+        elif db_type == "ORACLE":
+            rows = _list_q(cur, "SELECT index_name, table_name FROM "
+                                "user_indexes")
+        elif db_type == "POSTGRES":
+            rows = _list_q(cur, "SELECT indexname, tablename FROM "
+                                "pg_indexes WHERE schemaname NOT IN "
+                                "('pg_catalog','information_schema')")
+        elif db_type == "MARIADB":
+            rows = _list_q(cur, "SELECT DISTINCT index_name, table_name "
+                                "FROM information_schema.statistics WHERE "
+                                "index_name IS NOT NULL AND index_name "
+                                "<> 'PRIMARY' AND "
+                                "table_schema=DATABASE()")
+        else:
+            cur.close()
+            return ("TYPE non gestito", [])
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+def _list_pkfk(conn: Any, db_type: str) -> Tuple[str, List[List[str]]]:
+    """PK/FK per TYPE (info = vincolo + colonne)."""
+    try:
+        cur = conn.cursor()
+        rows: List[List[str]] = []
+        if db_type == "SQLITE":
+            cur.execute("SELECT name FROM sqlite_master WHERE "
+                        "type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = [str(r[0]) for r in cur.fetchall()]
+            for t in tables:
+                cur.execute(f"PRAGMA table_info({_quote_ident(db_type, t)})")
+                pkt = [str(r[1]) for r in cur.fetchall() if r[5]]
+                if pkt:
+                    rows.append([f"PK {t}", "(" + ",".join(pkt) + ")"])
+                cur.execute(f"PRAGMA foreign_key_list({_quote_ident(db_type, t)})")
+                for r in cur.fetchall():
+                    rows.append([f"FK {t}->{r[2]}",
+                                 f"{r[3]}->{str(r[4] or '')}"])
+        elif db_type in ("ACCESS", "SQLSERVER"):
+            for t in _list_tables(conn, db_type)[1]:
+                tn = t[0]
+                try:
+                    for r in cur.primaryKeys(tn):
+                        rows.append([f"PK {tn}",
+                                     f"{r[2]} ({r[3]})"])
+                except Exception:
+                    pass
+                try:
+                    for r in cur.foreignKeys(table=tn):
+                        rows.append([f"FK {r[6]}->{r[2]}",
+                                     f"{r[7]}->{r[3]}"])
+                except Exception:
+                    pass
+        elif db_type == "ORACLE":
+            rows = _list_q(cur, "SELECT constraint_name, table_name, "
+                                "constraint_type FROM user_constraints "
+                                "WHERE constraint_type IN ('P','F')")
+        elif db_type in ("POSTGRES", "MARIADB"):
+            rows = _list_q(cur, "SELECT constraint_name, table_name, "
+                                "constraint_type FROM "
+                                "information_schema.table_constraints "
+                                "WHERE constraint_type IN ('PRIMARY "
+                                "KEY','FOREIGN KEY')"
+                                + (" AND table_schema=DATABASE()"
+                                   if db_type == "MARIADB" else
+                                   " AND table_schema NOT IN "
+                                   "('pg_catalog','information_schema')"))
+        else:
+            cur.close()
+            return ("TYPE non gestito", [])
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+def _list_plus(conn: Any, db_type: str) -> Tuple[str, List[List[str]]]:
+    """PLUS: sequences/synonyms/events (engine-wise; SQLITE/ACCESS n/a)."""
+    try:
+        if db_type in ("SQLITE", "ACCESS"):
+            return ("n/a", [])
+        cur = conn.cursor()
+        rows: List[List[str]] = []
+        if db_type == "ORACLE":
+            for s in _list_q(cur, "SELECT sequence_name FROM user_sequences"):
+                rows.append(["SEQUENCE", s[0]])
+            for s in _list_q(cur, "SELECT synonym_name, table_name FROM "
+                                  "user_synonyms"):
+                rows.append(["SYNONYM", f"{s[0]}->{s[1]}"])
+        elif db_type == "SQLSERVER":
+            try:
+                for r in _list_q(cur, "SELECT name FROM sys.sequences"):
+                    rows.append(["SEQUENCE", r[0]])
+            except Exception:
+                pass
+            try:
+                for r in _list_q(cur, "SELECT name FROM sys.synonyms"):
+                    rows.append(["SYNONYM", r[0]])
+            except Exception:
+                pass
+        elif db_type == "POSTGRES":
+            for r in _list_q(cur, "SELECT c.relname FROM pg_class c JOIN "
+                                  "pg_namespace n ON c.relnamespace=n.oid "
+                                  "WHERE c.relkind='S' AND n.nspname NOT "
+                                  "IN ('pg_catalog','information_schema')"):
+                rows.append(["SEQUENCE", r[0]])
+        elif db_type == "MARIADB":
+            try:
+                for r in _list_q(cur, "SELECT event_name FROM "
+                                      "information_schema.events WHERE "
+                                      "event_schema=DATABASE()"):
+                    rows.append(["EVENT", r[0]])
+            except Exception:
+                pass
+        cur.close()
+        return ("", rows)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return ("n/d", [])
+
+
+_LIST_KINDS = ("TABLES", "VIEWS", "QUERIES", "PROCS", "TRIGGERS",
+               "INDEXES", "PKFK", "PLUS")
+
+
+def _list_kind(conn: Any, db_type: str, kind: str, cfg: Dict[str, Any]
+               ) -> Tuple[str, List[List[str]]]:
+    """Lista una KIND per TYPE. Ritorna (errore/n/d or '', rows)."""
+    if kind == "TABLES":
+        return _list_tables(conn, db_type)
+    elif kind == "VIEWS":
+        return _list_views(conn, db_type)
+    elif kind == "QUERIES":
+        return _list_queries(conn, db_type, cfg)
+    elif kind == "PROCS":
+        return _list_procs(conn, db_type)
+    elif kind == "TRIGGERS":
+        return _list_triggers(conn, db_type)
+    elif kind == "INDEXES":
+        return _list_indexes(conn, db_type)
+    elif kind == "PKFK":
+        return _list_pkfk(conn, db_type)
+    elif kind == "PLUS":
+        return _list_plus(conn, db_type)
+    return (f"LIST non valido: {kind}", [])
+
+
+def cmd_db_list(dictJob: Dict[str, str]) -> str:
+    """DB.LIST: DB.ID + LIST (default ALL) + FILE.OUT.LIST.
+
+    Lista oggetti del DB (senza dump del codice): per estensione del
+    file output .csv/.json/.xlsx; categorie per KIND (TABLES tabelle,
+    VIEWS viste, QUERIES query salvate solo ACCESS, PROCS procedures/
+    functions, TRIGGERS, INDEXES, PKFK vincoli PK/FK, PLUS sequences/
+    synonyms/events). In ALL le KIND non applicabili al TYPE sono
+    saltate. Righe: KIND,NAME,INFO (KIND vuote -> "(vuoto)").
+    """
+    global _db_used, dictDb
+    sProc = "cmd_db_list"
+    print("Sto eseguendo " + sProc)
+    sResult = ""
+    try:
+        db_id = str(dictJob.get("DB.ID", "")).strip().upper()
+        sResult, cfg = _db_cfg(db_id, True)
+        if sResult:
+            return _error_proc(sResult, sProc)
+        file_out = str(dictJob.get("FILE.OUT.LIST", "")).strip()
+        if not file_out:
+            return _error_proc("FILE.OUT.LIST non precisato", sProc)
+        f_low = file_out.lower()
+        if f_low.endswith(".csv"):
+            out_type = "CSV"
+        elif f_low.endswith(".json"):
+            out_type = "JSON"
+        elif f_low.endswith(".xlsx"):
+            out_type = "XLSX"
+        else:
+            s_ext = "." + file_out.rsplit(".", 1)[-1] if "." in \
+                os.path.basename(file_out) else file_out
+            return _error_proc(
+                f"esportazione {s_ext} non supportata", sProc)
+        s_list = str(dictJob.get("LIST", "ALL")).strip().upper()
+        kinds: List[str] = []
+        if s_list == "ALL":
+            kinds = list(_LIST_KINDS)
+        elif s_list in _LIST_KINDS:
+            kinds = [s_list]
+        else:
+            return _error_proc(
+                f"LIST non valida: {s_list} "
+                f"({','.join(_LIST_KINDS)}|ALL)", sProc)
+        db_type = str(cfg.get("TYPE", ""))
+        conn = cfg["HANDLE"]
+        rows: List[List[str]] = []
+        for kind in kinds:
+            sErr, krows = _list_kind(conn, db_type, kind, cfg)
+            if sErr and (sErr == "n/a"
+                         or sErr.startswith("non previsto")):
+                continue
+            if sErr:
+                rows.append([kind, "(n/d)", sErr[:120]])
+                continue
+            if not krows:
+                rows.append([kind, "(vuoto)", ""])
+                continue
+            for r in krows:
+                rows.append([kind, r[0], r[1] if len(r) > 1 else ""])
+        if out_type == "CSV":
+            with open(file_out, "w", encoding="utf-8-sig",
+                      newline="") as f:
+                writer = csv.writer(f, delimiter=";")
+                writer.writerow(["KIND", "NAME", "INFO"])
+                for r in rows:
+                    writer.writerow(r)
+        elif out_type == "JSON":
+            data = [{"KIND": a, "NAME": b, "INFO": c}
+                    for a, b, c in rows]
+            with open(file_out, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        else:
+            import pandas as pd
+            df = pd.DataFrame(rows, columns=["KIND", "NAME", "INFO"])
+            df.to_excel(file_out, index=False)
+        _db_used = True
+        _log_info(f"DB.LIST {s_list} {file_out} ({len(rows)} righe)")
+        sResult = _do_return(str(len(rows)), {"LIST": file_out})
+    except Exception as e:
+        sResult = str(e)
+    return _error_proc(sResult, sProc)
 
 
 def cmd_db_compact(dictJob: Dict[str, str]) -> str:
@@ -1245,6 +2101,12 @@ def cbCommands_db(dictJob: Dict[str, str]) -> str:
         return cmd_db_export(dictJob)
     elif sCommand == "DB.COMPACT":
         return cmd_db_compact(dictJob)
+    elif sCommand == "DB.INFO":
+        return cmd_db_info(dictJob)
+    elif sCommand == "DB.LIST":
+        return cmd_db_list(dictJob)
+    elif sCommand == "DB.LINK":
+        return cmd_db_link(dictJob)
     else:
         return f"cbCommands_db: Errore COMMAND DB sconosciuto: {sCommand}"
 

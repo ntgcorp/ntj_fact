@@ -1073,8 +1073,9 @@ def cmd_xls_append(dictJob: Dict[str, str]) -> str:
 
 
 _DB_COMMANDS = ("DB.OPEN", "DB.CREATE", "DB.CLOSE",
-                 "SQL.EXEC", "TAB.ZAP", "TAB.CREATE.JSON",
-                 "DB.IMPORT", "DB.EXPORT", "DB.COMPACT")
+                "SQL.EXEC", "TAB.ZAP", "TAB.CREATE.JSON",
+                "DB.IMPORT", "DB.EXPORT", "DB.COMPACT", "DB.INFO",
+                "DB.LIST", "DB.LINK")
 
 
 def cbCommands(dictJob: Dict[str, str]) -> str:
@@ -1161,7 +1162,9 @@ DATABASE COMMANDS (modulo ntj_fact_db, vedi prompt_ntj_fact_db.md):
   SQL.EXEC - esegue una sql: SELECT (opzionalmente verso Excel) o DML
     DB.ID               id dal dizionario
     SQL oppure FILE.IN.SQL      testo sql oppure file sql (xor: solo uno)
-    FILE.OUT.XLS        opzionale, output della SELECT (.xls/.xlsx)
+    FILE.OUT.XLS        opzionale solo per SELECT (.xls/.xlsx) oppure
+    FILE.OUT.EXPORT     opzionale solo per SELECT (.csv/.xls/.xlsx,
+                        per estensione); i due sono in xor
 
   TAB.ZAP - svuota una tabella (sempre DELETE FROM, mai TRUNCATE)
     DB.ID               id dal dizionario
@@ -1178,14 +1181,36 @@ DATABASE COMMANDS (modulo ntj_fact_db, vedi prompt_ntj_fact_db.md):
     TABLE               tabella (obbligatoria per JSON senza STRUCT)
     MODE                APPEND (default) | REPLACE
 
-  DB.EXPORT - esporta una query in un file
+  DB.EXPORT - esporta una query in un file: formato da estensione file output
     DB.ID               id dal dizionario
     OUT.QUERY           query da esportare (solo SELECT)
-    FILE.OUT.QUERY      file di output
-    OUT.TYPE            CSV | JSON (deve coincidere con l'estensione file)
+    FILE.OUT.QUERY      file di output; estensione decide il formato:
+                        .csv | .json | .xlsx
 
   DB.COMPACT - compatta un database a file (prima DB.CLOSE)
     FILE.IN.DB          file SQLITE o ACCESS; crea backup <file>.old
+
+  DB.INFO - scrive file .TXT con info ambiente/driver ODBC opz. DB
+    FILE.OUT.INFO       file output (deve finire con .txt)
+    DB.ID               opzionale, id dal dizionario (deve essere aperto):
+                        aggiunge versione DBMS, parametri (PASSWORD nascosta),
+                        tabelle con righe/colonne; senza DB.ID solo ambiente+ODBC
+
+  DB.LIST - lista oggetti del DB (senza dump del codice)
+    DB.ID               id dal dizionario (deve essere aperto)
+    LIST                TABLES|VIEWS|QUERIES|PROCS|TRIGGERS|INDEXES|PKFK|
+                        PLUS|ALL (default ALL; disponibili per TYPE:
+                        QUERIES solo ACCESS via ADOX, PROCS no SQLITE/ACCESS)
+    FILE.OUT.LIST       file output; estensione decide il formato:
+                        .csv | .json | .xlsx
+
+  DB.LINK - collega una tabella esterna in un DB ACCESS come allegata
+    DB.ID               id ACCESS dal dizionario (deve essere aperto)
+    DBL.ID              id sorgente dal dizionario (deve essere aperto,
+                        diverso da DB.ID; sorgente ACCESS = nessun driver
+                        extra, altri TYPE = serve driver ODBC installato)
+    DBL.TABLE           nome della tabella da collegare nel sorgente
+    DBL.NAME            nome della tabella allegata nel target ACCESS
 """
     print(sHelp.strip("\n"))
     return sResult
@@ -1202,8 +1227,10 @@ def main() -> None:
     print("Sto eseguendo " + sProc)
     sResult = ""
     try:
-        if len(sys.argv) < 2:
-            # Richiamo senza parametri: help dei comandi, exit 0
+        # Senza parametri (anche falsi argomenti vuoti del launcher):
+        # help dei comandi, exit 0
+        if len(sys.argv) < 2 or all(
+                not str(a).strip() for a in sys.argv[1:]):
             ShowHelp()
             return
         sResult = jData.Start()

@@ -98,8 +98,11 @@ a non-open DB is an error.
 
 **`SQL.EXEC`** — run ONE statement: `DB.ID=<id>`, `SQL=<statement>` xor
 `FILE.IN.SQL=<file.sql>` (exactly one). DDL/DML/DCL/SELECT allowed; no
-multi-statement. `SELECT` without `FILE.OUT.XLS` returns only the rowcount;
-with `FILE.OUT.XLS` (`.xls`/`.xlsx`) writes the rows + `RETURN.FILE.XLS`.
+multi-statement. `SELECT` without output returns only the rowcount;
+`FILE.OUT.XLS` (`.xls`/`.xlsx`) writes the rows + `RETURN.FILE.XLS`;
+`FILE.OUT.EXPORT` (`.csv`/`.xls`/`.xlsx` — by extension; in xor with
+`FILE.OUT.XLS`) writes CSV with `;`/header/UTF-8-BOM/NULL→empty or the
+Excel formats + `RETURN.FILE.EXPORT`.
 Returns rows (`RETURN.VALUE`).
 
 **`TAB.ZAP`** — empty a table: `DB.ID=<id>`, `TABLE=<tab>`. Always
@@ -122,14 +125,40 @@ Without STRUCT, columns are read from the existing table (all nullable).
 Returns loaded rows.
 
 **`DB.EXPORT`** — export a query to file: `DB.ID=<id>`, `OUT.QUERY=<select>`
-(SELECT only), `FILE.OUT.QUERY=<f>`, `OUT.TYPE=CSV|JSON` (required; extension
-must match). CSV: `;` delimiter, header; JSON: array of objects.
+(SELECT only), `FILE.OUT.QUERY=<f>`. `OUT.TYPE` is gone: the format is
+taken from the extension of `FILE.OUT.QUERY` — `.csv`, `.json`, `.xlsx`
+(any other extension = explicit error `esportazione <ext> non supportata`).
+CSV: `;` delimiter, header; JSON: array of objects; XLSX: single worksheet.
 Returns rows + `RETURN.FILE.QUERY`.
 
 **`DB.COMPACT`** — compact a database file: `FILE.IN.DB=<f>` (`.db`/`.sqlite`
 → SQLITE via `VACUUM`, `.mdb`/`.accdb` → ACCESS via DAO/JRO on Windows).
 First creates `<f>.old` backup (overwrites), then compacts. The file must not
 be open (`DB.CLOSE` first). Returns reclaimed bytes.
+
+**`DB.INFO`** — diagnostics: writes a text file with general info
+(`FILE.OUT.INFO=<f>`, must end `.txt`; optional `DB.ID` of an open DB).
+Sections: environment (platform/Python), installed ODBC drivers
+(`pyodbc.drivers()`), and with `DB.ID`: DBMS version, connection
+parameters (password masked), tables with row counts and columns.
+Resilient sections (`n/d` on error). Returns lines + `RETURN.FILE.INFO`.
+
+**`DB.LIST`** — lists database objects (no code dump): `DB.ID=<id>`
+(open), `LIST=TABLES|VIEWS|QUERIES|PROCS|TRIGGERS|INDEXES|PKFK|PLUS|ALL`
+(default `ALL`; QUERIES = ACCESS saved queries via ADOX only), +
+`FILE.OUT.LIST=<f>` (format from extension: `.csv`/`.json`/`.xlsx`).
+Rows are `KIND,NAME,INFO` (short info only); in `ALL` kind not
+applicable to the TYPE are skipped, empty kinds show `(vuoto)`,
+failed reads `(n/d)`. Returns rows + `RETURN.FILE.LIST`.
+
+**`DB.LINK`** — links an external table into an ACCESS database as a
+linked table: `DB.ID=<id>` (target, must be ACCESS and open),
+`DBL.ID=<id>` (source, open, ≠ target), `DBL.TABLE=<tab>` (source
+table), `DBL.NAME=<name>` (linked table name in the target). Created
+via DAO `CreateTableDef` (pywin32; ACCESS→ACCESS needs no extra
+driver; server/SQLITE sources need an ODBC driver — see prompt).
+Verification and duplicate check run on a fresh connection to the
+file (open ODBC handle has catalog cache). Returns `DBL.NAME`.
 
 ### Usage
 ```cmd
@@ -294,8 +323,11 @@ Chiudere un DB non aperto è errore.
 
 **`SQL.EXEC`** — esegue UN solo statement: `DB.ID=<id>`, `SQL=<statement>` xor
 `FILE.IN.SQL=<file.sql>` (esattamente uno). Ammessi DDL/DML/DCL/SELECT; niente
-multi-statement. `SELECT` senza `FILE.OUT.XLS` ritorna solo il conteggio;
-con `FILE.OUT.XLS` (`.xls`/`.xlsx`) scrive le righe + `RETURN.FILE.XLS`.
+multi-statement. `SELECT` senza output ritorna solo il conteggio;
+`FILE.OUT.XLS` (`.xls`/`.xlsx`) scrive le righe + `RETURN.FILE.XLS`;
+`FILE.OUT.EXPORT` (`.csv`/`.xls`/`.xlsx` — per estensione; in xor con
+`FILE.OUT.XLS`) scrive CSV con `;`/header/utf-8-sig/`NULL`→vuoto o i
+formati Excel + `RETURN.FILE.EXPORT`.
 Ritorna le righe (`RETURN.VALUE`).
 
 **`TAB.ZAP`** — svuota una tabella: `DB.ID=<id>`, `TABLE=<tab>`. Sempre
@@ -317,14 +349,40 @@ mancanti-nullable escluse, mancanti-notnull → errore con riga. Senza STRUCT,
 colonne lette dalla tabella esistente (tutte nullable). Ritorna le righe caricate.
 
 **`DB.EXPORT`** — esporta una query in file: `DB.ID=<id>`, `OUT.QUERY=<select>`
-(solo `SELECT`), `FILE.OUT.QUERY=<f>`, `OUT.TYPE=CSV|JSON` (obbligatorio;
-estensione deve coincidere). CSV: delimitatore `;`, header; JSON: array di
-oggetti. Ritorna righe + `RETURN.FILE.QUERY`.
+(solo `SELECT`), `FILE.OUT.QUERY=<f>`. `OUT.TYPE` e' stato rimosso: il
+formato si deduce dall'estensione di `FILE.OUT.QUERY` — `.csv`, `.json`,
+`.xlsx` (altri tipi = errore esplicito `esportazione <est> non supportata`).
+CSV: delimitatore `;`, header; JSON: array di oggetti; XLSX: sheet unico.
+Ritorna righe + `RETURN.FILE.QUERY`.
 
 **`DB.COMPACT`** — compatta un file database: `FILE.IN.DB=<f>` (`.db`/`.sqlite`
 → SQLITE via `VACUUM`, `.mdb`/`.accdb` → ACCESS via DAO/JRO su Windows).
 Prima crea backup `<f>.old` (sovrascrive), poi compatta. Il file non deve
 essere aperto (`DB.CLOSE` prima). Ritorna i byte recuperati.
+
+**`DB.INFO`** — diagnostica: scrive un file testo con info generali
+(`FILE.OUT.INFO=<f>`, deve finire `.txt`; opzionale `DB.ID` di un DB
+aperto). Sezioni: ambiente (piattaforma/Python), driver ODBC installati
+(`pyodbc.drivers()`), e con `DB.ID`: versione DBMS, parametri di
+connessione (password mascherata), tabelle con righe e colonne.
+Sezioni resilienti (`n/d` su errore). Ritorna righe + `RETURN.FILE.INFO`.
+
+**`DB.LIST`** — elenca gli oggetti del DB (senza dump del codice):
+`DB.ID=<id>` (aperto), `LIST=TABLES|VIEWS|QUERIES|PROCS|TRIGGERS|
+INDEXES|PKFK|PLUS|ALL` (default `ALL`; QUERIES = query salvate ACCESS
+via ADOX), `FILE.OUT.LIST=<f>` (formato per estensione: `.csv`/`.json`/
+`.xlsx`). Righe `KIND,NAME,INFO` (solo info brevi); in `ALL` le KIND
+non applicabili al TYPE sono saltate, KIND vuote → `(vuoto)`, letture
+fallite → `(n/d)`. Ritorna righe + `RETURN.FILE.LIST`.
+
+**`DB.LINK`** — collega una tabella di un DB esterno in un database
+ACCESS come *tabella allegata*: `DB.ID=<id>` (target, deve essere
+ACCESS e aperto), `DBL.ID=<id>` (sorgente, aperto, ≠ target),
+`DBL.TABLE=<tab>` (tabella sorgente), `DBL.NAME=<nome>` (nome allegata
+nel target). Creazione via DAO `CreateTableDef` (pywin32; ACCESS→ACCESS
+senza driver extra; sorgenti server/SQLITE richiedono driver ODBC —
+vedi prompt). Verifica e controllo duplicati su connessione fresca al
+file (l'handle ODBC aperto ha cache di catalogo). Ritorna `DBL.NAME`.
 
 ### Uso
 ```cmd
